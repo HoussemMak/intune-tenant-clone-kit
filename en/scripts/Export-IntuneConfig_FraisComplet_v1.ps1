@@ -96,6 +96,12 @@ $fam = @(
   @{ F='14_AdminTemplates';        P='deviceManagement/groupPolicyConfigurations';          N='displayName' }
   @{ F='15_EndpointSecurity';      P='deviceManagement/intents';                            N='displayName' }
   @{ F='16_Enrollment';            P='deviceManagement/deviceEnrollmentConfigurations';     N='displayName' }
+  @{ F='17_FeatureUpdateProfiles'; P='deviceManagement/windowsFeatureUpdateProfiles'; N='displayName' }
+  @{ F='18_QualityUpdateProfiles'; P='deviceManagement/windowsQualityUpdateProfiles'; N='displayName' }
+  @{ F='19_DriverUpdateProfiles';  P='deviceManagement/windowsDriverUpdateProfiles';  N='displayName' }
+  @{ F='20_TermsAndConditions';    P='deviceManagement/termsAndConditions';            N='displayName' }
+  @{ F='21_DeviceCategories';      P='deviceManagement/deviceCategories';              N='displayName' }
+  @{ F='22_RoleDefinitions';       P='deviceManagement/roleDefinitions';               N='displayName' }
 )
 
 Write-Host "Families :" -ForegroundColor Yellow

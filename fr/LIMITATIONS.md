@@ -22,10 +22,9 @@ Graph / Intune, soit parce qu'ils portent des données non transférables entre 
 
 Le kit énumère un ensemble fixe d'endpoints Intune ; tout ce qui est en dehors n'est pas exporté :
 
-- **Windows Update** — les anneaux de mise à jour sont clonés, mais **pas les profils Feature / Quality /
-  Driver update** (`windowsFeatureUpdateProfiles`, `windowsQualityUpdateProfiles`, `windowsDriverUpdateProfiles`).
-- **Termes et conditions**, **Catégories d'appareils**, **Règles de nettoyage d'appareils**.
-- **Définitions de rôles RBAC** (seuls les *scope tags* sont gérés).
+- **Règles de nettoyage d'appareils**.
+- **Attributions de rôles RBAC** et **définitions de rôles intégrées** (les *définitions* de rôles
+  personnalisés sont clonées ; les rôles intégrés et les *attributions* — qui détient un rôle — non).
 - **Personnalisation / Company branding / Organizational messages**.
 - **Tokens d'inscription** (Apple ADE/VPP, Android Enterprise) et **connecteurs PKI / certificat** —
   secrets ou infrastructure, non transférables entre tenants.

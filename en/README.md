@@ -38,7 +38,7 @@ Full **export → correct → import** cycle.
 
 | ✅ Automated | ⏸️ Manual (Intune limits) |
 |---|---|
-| Settings Catalog, configuration profiles, compliance, scripts, remediations, filters, scope tags, Store apps, app config, app protection, Autopilot, notifications, groups + assignments | Secrets (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA), LOB/Win32/VPP apps (binaries), Admin Templates, Endpoint Security (intents), Enrollment, **Device Inventory policies** |
+| Settings Catalog, configuration profiles, compliance, scripts, remediations, filters, scope tags, Store apps, app config, app protection, Autopilot, notifications, groups + assignments, Windows Update (rings + Feature/Quality/Driver profiles), Terms & Conditions, Device categories, custom RBAC roles | Secrets (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA), LOB/Win32/VPP apps (binaries), Admin Templates, Endpoint Security (intents), Enrollment, **Device Inventory policies** |
 
 > 📌 Full list of what is **not** cloned (and how to handle each item): [`LIMITATIONS.md`](LIMITATIONS.md).
 

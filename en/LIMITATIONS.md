@@ -22,10 +22,9 @@ target tenant.
 
 The kit enumerates a fixed set of Intune endpoints; anything outside that set is not exported:
 
-- **Windows Update** — update rings are cloned, but **Feature / Quality / Driver update profiles are not**
-  (`windowsFeatureUpdateProfiles`, `windowsQualityUpdateProfiles`, `windowsDriverUpdateProfiles`).
-- **Terms and Conditions**, **Device categories**, **Device cleanup rules**.
-- **RBAC role definitions** (only *scope tags* are handled).
+- **Device cleanup rules**.
+- **RBAC role assignments** and **built-in role definitions** (custom role *definitions* are cloned;
+  built-in roles and role *assignments* — who holds a role — are not).
 - **Company branding / Organizational messages** (tenant customization).
 - **Enrollment tokens** (Apple ADE/VPP, Android Enterprise) and **PKI / certificate connectors** —
   secrets or infrastructure, not portable between tenants.
