@@ -59,7 +59,7 @@ Copy-Item config.example.ps1 config.ps1
 # 2) Follow EXECUTER.md (manual) or EXECUTER_AUTO.md (zero-touch)
 ```
 
-Details, root causes and troubleshooting: [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
+Details, root causes and troubleshooting: [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) · [`docs/SEQUENCE.md`](docs/SEQUENCE.md) (execution sequence).
 
 ## AI assist (optional, experimental)
 
