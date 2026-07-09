@@ -1,0 +1,7 @@
+{
+  "@odata.type": "#microsoft.graph.deviceAndAppManagementAssignmentFilter",
+  "id": "11111111-1111-1111-1111-111111111111",
+  "displayName": "Sample - Filter",
+  "platform": "windows10AndLater",
+  "rule": "(device.model -eq \"SampleModel\")"
+}

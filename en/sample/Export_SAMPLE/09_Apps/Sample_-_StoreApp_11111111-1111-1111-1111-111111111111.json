@@ -1,0 +1,7 @@
+{
+  "@odata.type": "#microsoft.graph.winGetApp",
+  "id": "11111111-1111-1111-1111-111111111111",
+  "displayName": "Sample Store App",
+  "publisher": "Contoso",
+  "packageIdentifier": "9SAMPLE0000"
+}

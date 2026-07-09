@@ -1,0 +1,11 @@
+{
+  "@odata.type": "#microsoft.graph.deviceHealthScript",
+  "id": "11111111-1111-1111-1111-111111111111",
+  "displayName": "Sample - Remediation",
+  "detectionScriptContent": "V3JpdGUtT3V0cHV0ICdzYW1wbGUgZGV0ZWN0aW9uJw==",
+  "remediationScriptContent": "V3JpdGUtT3V0cHV0ICdzYW1wbGUgZGV0ZWN0aW9uJw==",
+  "runAsAccount": "system",
+  "roleScopeTagIds": [
+    "0"
+  ]
+}

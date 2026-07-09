@@ -1,0 +1,28 @@
+{
+  "@odata.type": "#microsoft.graph.deviceManagementConfigurationPolicy",
+  "id": "11111111-1111-1111-1111-111111111111",
+  "name": "Sample - Settings Catalog",
+  "description": "Exemple synthetique (donnees fictives)",
+  "platforms": "windows10",
+  "technologies": "mdm",
+  "roleScopeTagIds": [
+    "0"
+  ],
+  "templateReference": {
+    "templateId": "",
+    "templateFamily": "none"
+  },
+  "settings": [
+    {
+      "id": "0",
+      "settingInstance": {
+        "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+        "settingDefinitionId": "device_vendor_msft_policy_config_sample_allow",
+        "choiceSettingValue": {
+          "value": "device_vendor_msft_policy_config_sample_allow_1",
+          "children": []
+        }
+      }
+    }
+  ]
+}

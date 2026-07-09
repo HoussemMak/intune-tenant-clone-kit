@@ -1,0 +1,109 @@
+> [🇫🇷 Version française](../fr/EXECUTER.md)
+
+# EXECUTER — Full cycle Export → Fix → Import (SOURCE tenant → TARGET tenant)
+
+PowerShell 7 (pwsh). Run the steps in order. Copy-paste each block.
+At each connection, the display shows **the connected tenant and account** + the **expected** account: check before continuing.
+
+> Prerequisite: have copied `config.example.ps1` to `config.ps1` and filled in your tenant GUIDs.
+
+---
+
+### Step 1 — Variables (paste once; edit `$Kit`)
+```powershell
+$Kit='C:\path\to\intune-tenant-clone-kit'         # <-- edit
+. "$Kit\config.ps1"                               # loads $SourceTenantId,$TargetTenantId,$SourceDomain,$TargetDomain,$AppId
+$Stamp=(Get-Date -f yyyy-MM-dd_HHmm)
+$Src="$Kit\input\Export_$Stamp"; $Fixed=$Src; $Logs="$Kit\logs"; $Backup="$Kit\backup_$Stamp"
+$Report="$Kit\input\import-report.txt"           # (optional) report of a previous failed import, for the cleanup step
+$Pkg="$Kit\scripts"; $Engine="$Pkg\Import-IntuneConfig_Corrige_v3.ps1"; $Exporter="$Pkg\Export-IntuneConfig_FraisComplet_v1.ps1"
+$Scopes    =@('DeviceManagementConfiguration.ReadWrite.All','DeviceManagementApps.ReadWrite.All','DeviceManagementServiceConfig.ReadWrite.All','DeviceManagementRBAC.ReadWrite.All','DeviceManagementManagedDevices.ReadWrite.All')
+$ScopesRead=@('DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All','DeviceManagementServiceConfig.Read.All','DeviceManagementRBAC.Read.All')
+
+function Show-Tenant($expect){ $c=Get-MgContext; $o=$null; try{$o=(Invoke-MgGraphRequest GET 'https://graph.microsoft.com/v1.0/organization').value[0]}catch{}
+  Write-Host ("--> CONNECTED TO : {0}   (TenantId {1})" -f $o.displayName,$c.TenantId) -ForegroundColor Cyan
+  Write-Host ("    Account      : {0}" -f $c.Account) -ForegroundColor Cyan
+  Write-Host ("    EXPECTED     : {0}" -f $expect) -ForegroundColor Yellow }
+function Connect-Source { Disconnect-MgGraph -EA SilentlyContinue|Out-Null; Connect-MgGraph -TenantId $SourceTenantId -Scopes $ScopesRead -NoWelcome; Show-Tenant "SOURCE — admin account @ $SourceDomain (read-only)" }
+function Connect-Target { Disconnect-MgGraph -EA SilentlyContinue|Out-Null; Connect-MgGraph -TenantId $TargetTenantId -Scopes $Scopes     -NoWelcome; Show-Tenant "TARGET — admin account @ $TargetDomain (write)" }
+function Assert-Source  { if((Get-MgContext).TenantId -ne $SourceTenantId){throw 'STOP: not connected to SOURCE tenant'}; 'OK SOURCE' }
+function Assert-Target  { if((Get-MgContext).TenantId -ne $TargetTenantId){throw 'STOP: not connected to TARGET tenant'};  'OK TARGET' }
+```
+
+### Step 2 — Module + unblocking the scripts
+```powershell
+Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force; Import-Module Microsoft.Graph.Authentication
+Get-ChildItem $Pkg -Filter *.ps1 | Unblock-File
+New-Item -ItemType Directory -Force $Logs,$Backup | Out-Null
+```
+
+### Step 3 — Connect SOURCE + FRESH EXPORT (read-only) → `$Src`
+```powershell
+Connect-Source                     # <-- sign in with a SOURCE admin account ; CHECK the "CONNECTED TO / EXPECTED" display
+Assert-Source
+& $Exporter -SourceTenantId $SourceTenantId -OutputPath $Src
+```
+> Produces a same-day export, **already rehydrated** (settings, script contents, compliance actions). This is the import source (`$Fixed`).
+
+### Step 4 — Connect TARGET + backup
+```powershell
+Connect-Target                     # <-- sign in with a TARGET admin account ; CHECK the display
+Assert-Target
+'deviceManagement/deviceConfigurations','deviceManagement/configurationPolicies','deviceManagement/deviceCompliancePolicies','deviceManagement/deviceManagementScripts','deviceManagement/deviceHealthScripts','deviceManagement/roleScopeTags','deviceManagement/assignmentFilters','deviceAppManagement/mobileApps','deviceAppManagement/mobileAppConfigurations','deviceAppManagement/managedAppPolicies'|%{
+ (Invoke-MgGraphRequest GET "https://graph.microsoft.com/beta/$_`?`$top=999").value|ConvertTo-Json -Depth 100|Set-Content "$Backup\$($_ -replace '/','_').json" -Encoding UTF8}
+```
+
+### Step 5 — (OPTIONAL) Clean up a previous failed import — preview
+> Only if you already have a failed import to clean up (report in `$Report`). Otherwise, skip to step 7.
+```powershell
+& "$Pkg\Invoke-IntuneImportCleanupFromReport.ps1" -ReportPath $Report -TargetTenantId $TargetTenantId -LogPath "$Logs\01_preview.csv"
+```
+
+### Step 6 — (OPTIONAL) Cleanup — execute
+```powershell
+& "$Pkg\Invoke-IntuneImportCleanupFromReport.ps1" -ReportPath $Report -TargetTenantId $TargetTenantId -Execute -Force -LogPath "$Logs\02_exec.csv"
+```
+
+### Step 7 — Preview the policies (no writes)
+```powershell
+Connect-Target; Assert-Target
+& $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Policies -LogPath "$Logs\03_preflight.csv"
+```
+
+### Step 8 — Import (preview each wave: remove `-Execute`)
+```powershell
+Connect-Target; Assert-Target
+& $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Foundation -Execute -LogPath "$Logs\05_foundation.csv"
+& $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Apps       -Execute -LogPath "$Logs\06_apps.csv"
+& "$Pkg\Build-IntuneAppIdMap.ps1" -TargetTenantId $TargetTenantId -SourceExportPath "$Fixed\09_Apps" -OutCsv "$Kit\AppIdMap.csv"
+& $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Policies   -Execute -LogPath "$Logs\07_policies.csv"
+& $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Scripts    -Execute -LogPath "$Logs\08_scripts.csv"
+& $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Mobile     -Execute -LogPath "$Logs\09_mobile.csv"
+```
+
+### Step 9 — Import summary
+```powershell
+Get-ChildItem "$Logs\0*.csv"|%{"`n$($_.Name)";Import-Csv $_|Group-Object Status|Format-Table Name,Count -Auto}
+```
+
+### Step 10 — Assignments: groups + assignments, remap by NAME (PREVIEW then `-Execute`)
+```powershell
+# PREVIEW (no writes): source export + groups plan + assignments plan
+& "$Pkg\Invoke-IntuneAssignments_Graph.ps1" -SourceTenantId $SourceTenantId -TargetTenantId $TargetTenantId -Phase All
+# Execution: creates the missing groups (by name) and applies the remapped assignments
+& "$Pkg\Invoke-IntuneAssignments_Graph.ps1" -SourceTenantId $SourceTenantId -TargetTenantId $TargetTenantId -Phase All -Execute
+```
+> In manual mode, this script connects interactively (SOURCE for the export, TARGET for the write). For a fully unattended run, see [`EXECUTER_AUTO.md`](EXECUTER_AUTO.md).
+
+### Step 11 — Final verification (SOURCE vs TARGET counts)
+```powershell
+function C($t,$e){Disconnect-MgGraph -EA SilentlyContinue|Out-Null;Connect-MgGraph -TenantId $t -Scopes $ScopesRead -NoWelcome|Out-Null;(Invoke-MgGraphRequest GET "https://graph.microsoft.com/beta/$e`?`$top=999").value.Count}
+'deviceManagement/configurationPolicies','deviceManagement/deviceCompliancePolicies','deviceManagement/deviceConfigurations','deviceManagement/deviceManagementScripts','deviceManagement/deviceHealthScripts'|%{[pscustomobject]@{Endpoint=$_;Source=(C $SourceTenantId $_);Target=(C $TargetTenantId $_)}}|Format-Table -Auto
+```
+
+### Step 12 — Manual (to do by hand, outside the script — Intune limits)
+```
+- Secret-bearing profiles (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA values): re-enter the value and recreate.
+- LOB / Win32 / VPP apps: re-upload the binary.
+- Admin Templates, Endpoint Security (intents), Enrollment: recreate in the portal.
+```

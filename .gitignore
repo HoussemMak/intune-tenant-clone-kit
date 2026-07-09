@@ -1,0 +1,20 @@
+# ============================================================================
+#  Ne JAMAIS committer de données réelles ni d'identifiants de tenant.
+#  Motifs valables à n'importe quelle profondeur (racine, en/, fr/).
+# ============================================================================
+**/input/*
+!**/input/.gitkeep
+**/output/
+**/logs/*
+!**/logs/.gitkeep
+**/backup_*/
+**/backup/
+**/FixedExport/
+**/assignments/
+**/IntuneExport_Assignments/
+**/config.ps1
+**/*.csv
+
+*.log
+.DS_Store
+Thumbs.db

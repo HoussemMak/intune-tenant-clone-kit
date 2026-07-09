@@ -1,0 +1,33 @@
+{
+  "Version": "SAMPLE",
+  "ExportedAt": "2026-01-01T00:00:00Z",
+  "TenantId": "00000000-0000-0000-0000-000000000000",
+  "TenantName": "Contoso (exemple synthetique)",
+  "Account": "admin@contoso.example.com",
+  "Families": [
+    {
+      "Family": "02_ConfigurationPolicies",
+      "Count": 1
+    },
+    {
+      "Family": "03_CompliancePolicies",
+      "Count": 1
+    },
+    {
+      "Family": "04_ScriptsPowerShell",
+      "Count": 1
+    },
+    {
+      "Family": "06_Remediations",
+      "Count": 1
+    },
+    {
+      "Family": "07_Filters",
+      "Count": 1
+    },
+    {
+      "Family": "09_Apps",
+      "Count": 1
+    }
+  ]
+}
