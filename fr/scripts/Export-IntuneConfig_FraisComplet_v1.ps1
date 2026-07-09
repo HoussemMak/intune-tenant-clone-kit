@@ -34,6 +34,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $B = 'https://graph.microsoft.com/beta'
+# Exclusions connues (NON exportees - voir LIMITATIONS.md) : Device Inventory policies (non exportables
+# avec un token Microsoft Graph classique), Modeles d'administration ADMX, intents Endpoint Security,
+# configurations d'inscription, secrets chiffres, et binaires d'apps LOB/Win32/VPP.
 $warn = New-Object System.Collections.Generic.List[string]
 $counts = @()
 

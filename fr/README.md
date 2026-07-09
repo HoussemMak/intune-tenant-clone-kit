@@ -38,7 +38,9 @@ Cycle complet **export → correction → import**.
 
 | ✅ Automatisé | ⏸️ Manuel (limites Intune) |
 |---|---|
-| Settings Catalog, Profils de configuration, Conformité, Scripts, Remédiations, Filtres, Scope tags, Apps Store, App Config, App Protection, Autopilot, Notifications, Groupes + affectations | Secrets (Wi-Fi/PSK, AppLocker/WDAC, OMA chiffré), Apps LOB/Win32/VPP (binaires), Admin Templates, Endpoint Security (intents), Enrollment |
+| Settings Catalog, Profils de configuration, Conformité, Scripts, Remédiations, Filtres, Scope tags, Apps Store, App Config, App Protection, Autopilot, Notifications, Groupes + affectations | Secrets (Wi-Fi/PSK, AppLocker/WDAC, OMA chiffré), Apps LOB/Win32/VPP (binaires), Admin Templates, Endpoint Security (intents), Enrollment, **Device Inventory policies** |
+
+> 📌 Liste complète de ce qui n'est **pas** cloné (et comment gérer chaque élément) : [`LIMITATIONS.md`](LIMITATIONS.md).
 
 ## Prérequis
 
