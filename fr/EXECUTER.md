@@ -107,3 +107,12 @@ function C($t,$e){Disconnect-MgGraph -EA SilentlyContinue|Out-Null;Connect-MgGra
 - Apps LOB / Win32 / VPP : re-téléverser le binaire.
 - Admin Templates, Endpoint Security (intents), Enrollment : recréer au portail.
 ```
+
+### Assistant IA (optionnel) — aide à la recréation des éléments manuels
+```powershell
+# Génère un runbook de recréation (à relire) + des scaffolds PowerShell pour les éléments NON
+# importables automatiquement (secrets, ADMX, intents Endpoint Security...). Nécessite les réglages
+# IA dans config.ps1 (votre propre clé API). Les secrets sont expurgés ; n'écrit JAMAIS dans un tenant.
+& "$Pkg\Invoke-IntuneAIAssist.ps1" -ExportPath $Fixed -ImportLog "$Logs\07_policies.csv" -Language fr
+# -> ai-output\RUNBOOK.md + ai-output\scaffolds\*.ps1  (à relire avant toute exécution)
+```

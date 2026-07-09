@@ -107,3 +107,12 @@ function C($t,$e){Disconnect-MgGraph -EA SilentlyContinue|Out-Null;Connect-MgGra
 - LOB / Win32 / VPP apps: re-upload the binary.
 - Admin Templates, Endpoint Security (intents), Enrollment: recreate in the portal.
 ```
+
+### AI assist (optional) — draft recreation help for the manual items
+```powershell
+# Generate a review-first recreation runbook + PowerShell scaffolds for items that could NOT be
+# auto-imported (secrets, ADMX, Endpoint Security intents...). Requires AI settings in config.ps1
+# (your own API key). Secrets are redacted; it NEVER writes to a tenant.
+& "$Pkg\Invoke-IntuneAIAssist.ps1" -ExportPath $Fixed -ImportLog "$Logs\07_policies.csv" -Language en
+# -> ai-output\RUNBOOK.md + ai-output\scaffolds\*.ps1  (review before running anything)
+```

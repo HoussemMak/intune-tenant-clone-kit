@@ -114,3 +114,14 @@ Register-ScheduledTask -TaskName 'IntuneCloneKit-ZeroTouch' -Action $act -Trigge
 Secret-bearing profiles (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA), LOB/Win32/VPP apps (binaries),
 Admin Templates, Endpoint Security (intents), Enrollment: not clonable from metadata alone.
 They are **skipped cleanly** (status `SKIP_*`) and listed in the report for manual follow-up.
+
+## AI assist (optional)
+
+Add `-UseAIAssist` to the unattended run to also draft a recreation **runbook + scaffolds** for the
+manual items (see [`LIMITATIONS.md`](LIMITATIONS.md)), right after verification. Requires AI settings
+in `config.ps1` (your own API key). Output goes to `output\ai\`. It **never writes to a tenant** and
+redacts secrets before sending metadata to the AI endpoint.
+
+```powershell
+pwsh -File "$Kit\Invoke-IntuneCloneKit-Unattended.ps1" -UseAIAssist
+```

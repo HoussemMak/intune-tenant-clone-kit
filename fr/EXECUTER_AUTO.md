@@ -114,3 +114,15 @@ Register-ScheduledTask -TaskName 'IntuneCloneKit-ZeroTouch' -Action $act -Trigge
 Profils à secret (Wi-Fi/PSK, AppLocker/WDAC, OMA chiffré), apps LOB/Win32/VPP (binaires),
 Admin Templates, Endpoint Security (intents), Enrollment : non clonables par métadonnée seule.
 Ils sont **ignorés proprement** (statut `SKIP_*`) et listés dans le rapport pour reprise manuelle.
+
+## Assistant IA (optionnel)
+
+Ajoutez `-UseAIAssist` à l'exécution non-surveillée pour rédiger aussi un **runbook de recréation +
+scaffolds** pour les éléments manuels (voir [`LIMITATIONS.md`](LIMITATIONS.md)), juste après la
+vérification. Nécessite les réglages IA dans `config.ps1` (votre propre clé API). La sortie va dans
+`output\ai\`. **N'écrit jamais dans un tenant** et expurge les secrets avant d'envoyer les métadonnées
+à l'endpoint IA.
+
+```powershell
+pwsh -File "$Kit\Invoke-IntuneCloneKit-Unattended.ps1" -UseAIAssist
+```

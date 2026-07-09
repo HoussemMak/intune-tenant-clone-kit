@@ -86,7 +86,8 @@ param(
     [switch]$StaticOnlyGroups,
     [switch]$StopOnImportErrors,
     [switch]$Preview,
-    [switch]$AllowInteractive
+    [switch]$AllowInteractive,
+    [switch]$UseAIAssist
 )
 
 $ErrorActionPreference = 'Stop'
@@ -115,6 +116,7 @@ $Exporter = Join-Path $ScriptsDir 'Export-IntuneConfig_FraisComplet_v1.ps1'
 $Cleanup  = Join-Path $ScriptsDir 'Invoke-IntuneImportCleanupFromReport.ps1'
 $AppMap   = Join-Path $ScriptsDir 'Build-IntuneAppIdMap.ps1'
 $Assign   = Join-Path $ScriptsDir 'Invoke-IntuneAssignments_Graph.ps1'
+$AIAssist = Join-Path $ScriptsDir 'Invoke-IntuneAIAssist.ps1'
 
 $VerifyEndpoints = @(
     'deviceManagement/configurationPolicies','deviceManagement/deviceCompliancePolicies',
@@ -516,6 +518,12 @@ try {
 
     Invoke-Assignments
     Invoke-Verification
+
+    if ($UseAIAssist) {
+        Invoke-Step -Name 'Etape 8 - Assistant IA de recreation (optionnel)' -LogPath '' -Action {
+            & $AIAssist -ExportPath $script:ActiveSource -OutputPath (Join-Path $OutputDir 'ai') -Language 'fr' -AssumeYes
+        }
+    }
 
     New-FinalReport
     Write-Banner 'Execution terminee' 'Green'
