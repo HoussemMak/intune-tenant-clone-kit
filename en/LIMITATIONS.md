@@ -18,6 +18,25 @@ target tenant.
 | **Endpoint Security intents** | The `intents` template model is not covered. | Recreate at the portal. |
 | **Enrollment configurations** | Tenant-specific enrollment restrictions / status pages. | Recreate at the portal. |
 
+## Other configuration types not cloned
+
+The kit enumerates a fixed set of Intune endpoints; anything outside that set is not exported:
+
+- **Windows Update** — update rings are cloned, but **Feature / Quality / Driver update profiles are not**
+  (`windowsFeatureUpdateProfiles`, `windowsQualityUpdateProfiles`, `windowsDriverUpdateProfiles`).
+- **Terms and Conditions**, **Device categories**, **Device cleanup rules**.
+- **RBAC role definitions** (only *scope tags* are handled).
+- **Company branding / Organizational messages** (tenant customization).
+- **Enrollment tokens** (Apple ADE/VPP, Android Enterprise) and **PKI / certificate connectors** —
+  secrets or infrastructure, not portable between tenants.
+
+Recreate these at the portal, or handle them with a dedicated tool.
+
+## Out of scope by design
+
+- **Conditional Access** policies — these belong to **Microsoft Entra ID**, not Intune.
+- **Devices, users, Autopilot hardware hashes, reports / inventory data** — runtime data, not configuration.
+
 ## Handled, but tenant-dependent
 
 - **Groups, filters, scope tags, app IDs** are **remapped by name** — the target objects must already

@@ -61,6 +61,14 @@ Copy-Item config.example.ps1 config.ps1
 
 Details, root causes and troubleshooting: [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 
+## AI assist (optional, experimental)
+
+For the items the kit cannot auto-import (see [`LIMITATIONS.md`](LIMITATIONS.md)),
+[`scripts/Invoke-IntuneAIAssist.ps1`](scripts/Invoke-IntuneAIAssist.ps1) can ask a **configurable AI
+endpoint** (Azure OpenAI / OpenAI / custom) to draft a recreation **runbook + PowerShell scaffolds**
+for human review. It **never writes to a tenant**, redacts secrets before sending, and is **opt-in** —
+the API key is yours (set in `config.ps1`, git-ignored) and is never shipped with the kit.
+
 ## Structure
 
 ```

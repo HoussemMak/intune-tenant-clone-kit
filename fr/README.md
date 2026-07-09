@@ -61,6 +61,15 @@ Copy-Item config.example.ps1 config.ps1
 
 Détails, causes racines et dépannage : [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 
+## Assistant IA (optionnel, expérimental)
+
+Pour les éléments non importables automatiquement (voir [`LIMITATIONS.md`](LIMITATIONS.md)),
+[`scripts/Invoke-IntuneAIAssist.ps1`](scripts/Invoke-IntuneAIAssist.ps1) peut demander à un **endpoint
+IA configurable** (Azure OpenAI / OpenAI / personnalisé) de rédiger un **runbook de recréation + des
+scaffolds PowerShell** pour revue humaine. Il **n'écrit jamais dans un tenant**, expurge les secrets
+avant l'envoi, et est **opt-in** — la clé API est la vôtre (dans `config.ps1`, gitignoré) et n'est
+jamais livrée avec le kit.
+
 ## Structure
 
 ```

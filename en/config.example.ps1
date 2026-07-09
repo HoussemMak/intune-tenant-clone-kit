@@ -33,3 +33,14 @@ $CertThumbprint = ''
 
 # Optional (legacy manual mode): App registration for interactive Connect-MgGraph.
 $AppId          = ''
+
+# ----------------------------------------------------------------------------
+#  AI ASSIST (optional, experimental) — used by scripts\Invoke-IntuneAIAssist.ps1
+#  Drafts recreation runbooks/scaffolds for items the kit cannot auto-import.
+#  The API key is YOURS and is never shipped with the kit (config.ps1 is gitignored).
+#  Prefer Azure OpenAI so the data stays in your tenant.
+# ----------------------------------------------------------------------------
+$AiProvider = ''   # 'AzureOpenAI' | 'OpenAI' | 'Custom'
+$AiEndpoint = ''   # full chat/completions URL (required for AzureOpenAI / Custom)
+$AiApiKey   = ''   # YOUR API key
+$AiModel    = ''   # model / deployment name
