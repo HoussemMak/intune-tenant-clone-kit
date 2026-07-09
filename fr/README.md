@@ -70,6 +70,17 @@ scaffolds PowerShell** pour revue humaine. Il **n'écrit jamais dans un tenant**
 avant l'envoi, et est **opt-in** — la clé API est la vôtre (dans `config.ps1`, gitignoré) et n'est
 jamais livrée avec le kit.
 
+## Helpers avancés (optionnels)
+
+- **`scripts/Recover-IntuneOmaSecrets.ps1`** — récupère la valeur en clair des secrets OMA-URI chiffrés
+  depuis la source et la ré-injecte dans l'export (aussi `-RecoverSecrets` de l'orchestrateur), pour que
+  ces profils s'importent automatiquement. Nécessite les droits de lecture source ; écrit du clair sur
+  le disque — à protéger.
+- **`scripts/Publish-IntuneApp.ps1`** *(expérimental)* — orchestre l'upload d'une app Win32 `.intunewin`
+  depuis un binaire local + métadonnées (création app → content version → SAS → upload par blocs → commit).
+- **`scripts/Invoke-IntunePortalCaptureToScript.ps1`** — transforme une capture portail (Device Inventory,
+  endpoints gatés) en script de recréation rédigé par l'IA (revue d'abord).
+
 ## Structure
 
 ```

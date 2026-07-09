@@ -69,6 +69,16 @@ endpoint** (Azure OpenAI / OpenAI / custom) to draft a recreation **runbook + Po
 for human review. It **never writes to a tenant**, redacts secrets before sending, and is **opt-in** —
 the API key is yours (set in `config.ps1`, git-ignored) and is never shipped with the kit.
 
+## Advanced helpers (optional)
+
+- **`scripts/Recover-IntuneOmaSecrets.ps1`** — pull encrypted OMA-URI secret values from the source and
+  re-inject them into the export (also the orchestrator's `-RecoverSecrets`), so those profiles import
+  automatically. Needs source read rights; writes plaintext to disk — protect it.
+- **`scripts/Publish-IntuneApp.ps1`** *(experimental)* — orchestrate a Win32 `.intunewin` upload from a
+  local binary + metadata (create app → content version → SAS → block upload → commit).
+- **`scripts/Invoke-IntunePortalCaptureToScript.ps1`** — turn a portal capture (Device Inventory, gated
+  endpoints) into an AI-drafted, review-first recreation script.
+
 ## Structure
 
 ```

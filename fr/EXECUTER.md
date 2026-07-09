@@ -116,3 +116,26 @@ function C($t,$e){Disconnect-MgGraph -EA SilentlyContinue|Out-Null;Connect-MgGra
 & "$Pkg\Invoke-IntuneAIAssist.ps1" -ExportPath $Fixed -ImportLog "$Logs\07_policies.csv" -Language fr
 # -> ai-output\RUNBOOK.md + ai-output\scaffolds\*.ps1  (à relire avant toute exécution)
 ```
+
+### Récupérer les secrets OMA (optionnel) — avant de basculer vers la cible
+```powershell
+# Encore connecté à la SOURCE, récupère la valeur en clair des secrets OMA-URI chiffrés et la ré-injecte
+# dans l'export, pour que ces profils s'importent automatiquement (Intune re-chiffre côté cible).
+# Nécessite les droits de lecture source. Écrit des secrets en clair sur le disque — protéger, ne jamais committer.
+Connect-Source ; Assert-Source
+& "$Pkg\Recover-IntuneOmaSecrets.ps1" -ExportPath $Fixed -SourceTenantId $SourceTenantId
+```
+
+### Capture portail → recréation IA (optionnel) — pour les objets non exportables par un token Graph
+```powershell
+# Pour Device Inventory policies / endpoints gatés : capturer le JSON dans le navigateur (F12 -> Réseau)
+# sur la source, puis laisser l'IA rédiger un script de recréation (revue d'abord, n'écrit jamais dans un tenant).
+& "$Pkg\Invoke-IntunePortalCaptureToScript.ps1" -CaptureFile .\capture.json -Description "Device Inventory policy" -Language fr
+```
+
+### Publier une app Win32 (optionnel, EXPÉRIMENTAL) — vous fournissez le .intunewin
+```powershell
+# Les binaires d'apps ne sont jamais exportés. Fournissez le .intunewin + les métadonnées ; ceci orchestre l'upload.
+# APERÇU par défaut ; ajouter -Execute uniquement sur un tenant bac à sable.
+& "$Pkg\Publish-IntuneApp.ps1" -AppMetadataJson .\app.json -IntuneWinFile .\app.intunewin -TargetTenantId $TargetTenantId
+```

@@ -87,7 +87,8 @@ param(
     [switch]$StopOnImportErrors,
     [switch]$Preview,
     [switch]$AllowInteractive,
-    [switch]$UseAIAssist
+    [switch]$UseAIAssist,
+    [switch]$RecoverSecrets
 )
 
 $ErrorActionPreference = 'Stop'
@@ -117,6 +118,7 @@ $Cleanup  = Join-Path $ScriptsDir 'Invoke-IntuneImportCleanupFromReport.ps1'
 $AppMap   = Join-Path $ScriptsDir 'Build-IntuneAppIdMap.ps1'
 $Assign   = Join-Path $ScriptsDir 'Invoke-IntuneAssignments_Graph.ps1'
 $AIAssist = Join-Path $ScriptsDir 'Invoke-IntuneAIAssist.ps1'
+$RecoverSec = Join-Path $ScriptsDir 'Recover-IntuneOmaSecrets.ps1'
 
 $VerifyEndpoints = @(
     'deviceManagement/configurationPolicies','deviceManagement/deviceCompliancePolicies',
@@ -269,6 +271,7 @@ function Invoke-Export {
         & $Exporter -SourceTenantId $SourceTenantId -OutputPath $out
         if (-not (Test-Path -LiteralPath (Join-Path $out 'manifest.json'))) { throw 'Incomplete export : manifest.json missing.' }
         $script:ActiveSource = $out
+        if ($RecoverSecrets -and (Test-Path $RecoverSec)) { Write-Info 'Recovering OMA secrets from source...'; & $RecoverSec -ExportPath $out -SourceTenantId $SourceTenantId -AssumeYes }
     }
     Write-Info ("Import source : {0}" -f $script:ActiveSource)
 }

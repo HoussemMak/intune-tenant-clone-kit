@@ -11,9 +11,9 @@ target tenant.
 
 | Object type | Why | What to do |
 |---|---|---|
-| **Device Inventory policies** (the newer *"collect device inventory"* / properties-catalog configuration) | These policies are **not returned by the standard `deviceManagement` configuration endpoints** the kit enumerates, and are **not exportable with a regular Microsoft Graph token** — the Intune portal uses a separate/internal token for them. | Recreate them manually in the target tenant. |
-| **Encrypted secrets** (Wi-Fi/PSK, VPN, custom OMA-URI with `secretReferenceValueId`, AppLocker/WDAC blobs) | Intune never exports a secret value in clear text; the reference pointer is tenant-specific. | Recreate the profile and re-enter the secret value. |
-| **LOB / Win32 / VPP apps** | The installer binary (`.intunewin`, package, VPP token) is not part of the exported JSON metadata. | Re-upload the binary, then re-map assignments. |
+| **Device Inventory policies** (the newer *"collect device inventory"* / properties-catalog configuration) | These policies are **not returned by the standard `deviceManagement` configuration endpoints** the kit enumerates, and are **not exportable with a regular Microsoft Graph token** — the Intune portal uses a separate/internal token for them. | Recreate manually — or `Invoke-IntunePortalCaptureToScript.ps1` turns a portal capture into an AI-drafted recreation script. |
+| **Encrypted secrets** (Wi-Fi/PSK, VPN, custom OMA-URI with `secretReferenceValueId`, AppLocker/WDAC blobs) | Intune never exports a secret value in clear text; the reference pointer is tenant-specific. | `Recover-IntuneOmaSecrets.ps1` (or the orchestrator's `-RecoverSecrets`) pulls the clear value from the source and re-injects it — no re-typing (needs source read rights); otherwise recreate and re-enter the secret. |
+| **LOB / Win32 / VPP apps** | The installer binary (`.intunewin`, package, VPP token) is not part of the exported JSON metadata. | Provide the binary; `Publish-IntuneApp.ps1` (experimental) orchestrates the Win32 `.intunewin` upload, then re-map assignments. |
 | **Administrative Templates (ADMX)** | Not handled by the Settings Catalog engine. | Recreate at the portal (or migrate them to the Settings Catalog). |
 | **Endpoint Security intents** | The `intents` template model is not covered. | Recreate at the portal. |
 | **Enrollment configurations** | Tenant-specific enrollment restrictions / status pages. | Recreate at the portal. |
