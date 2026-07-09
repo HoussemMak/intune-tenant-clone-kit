@@ -2,6 +2,8 @@
 
 # intune-tenant-clone-kit
 
+![Licence : MIT](https://img.shields.io/badge/License-MIT-green.svg) ![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-5391FE.svg?logo=powershell&logoColor=white) ![Microsoft Graph](https://img.shields.io/badge/Microsoft%20Graph-beta-0078D4.svg) ![PRs bienvenues](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
+
 **Cloner la configuration Microsoft Intune d'un tenant vers un autre (SOURCE → CIBLE), de façon fiable.**
 
 ![Architecture du intune-tenant-clone-kit](FR.png)
