@@ -112,10 +112,12 @@ function Get-AllValues {
     $all=@(); $u="$GraphBase/$Path"
     do {
         $r = Invoke-MgGraphRequest -Method GET -Uri $u
-        if ($r.value) { $all += $r.value }
+        if ($r.value) { $all += @($r.value) }
         $u = $r.'@odata.nextLink'
     } while ($u)
-    ,$all
+    # Streamer les elements (defense en profondeur). L'appelant enchaine "| ForEach-Object",
+    # donc ",$all" fonctionnait, mais "return $all" evite tout risque de collapse si l'appel change.
+    return $all
 }
 
 function Remove-TopKeys { param([hashtable]$H,[string[]]$Keys) foreach($k in $Keys){ if($H.ContainsKey($k)){ [void]$H.Remove($k) } } }

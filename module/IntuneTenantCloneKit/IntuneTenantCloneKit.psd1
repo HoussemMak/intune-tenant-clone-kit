@@ -1,6 +1,6 @@
 @{
     RootModule           = 'IntuneTenantCloneKit.psm1'
-    ModuleVersion        = '1.0.1'
+    ModuleVersion        = '1.0.2'
     GUID                 = '2dfaf5e5-83c3-4d11-97b5-edc8c1a1bd89'
     Author               = 'Houmak'
     CompanyName          = 'Minerva IA'
@@ -39,6 +39,12 @@
             LicenseUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit'
             ReleaseNotes = @'
+1.0.2
+- Hardening (no behaviour change): normalise the last pagination helper (Get-AllValues in
+  Import-IntuneConfiguration) from ",$all" to "return $all". Its only caller already piped
+  "| ForEach-Object" so it was safe, but this removes the last instance of the collapse-prone
+  idiom for defence in depth.
+
 1.0.1
 - FIX (blocker): the Graph pagination helper Get-All returned ",$all", which the callers
   collapsed with "@(Get-All ...)" into a single-element array. The per-family foreach then
