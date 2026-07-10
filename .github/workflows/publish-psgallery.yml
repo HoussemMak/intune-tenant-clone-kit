@@ -1,0 +1,61 @@
+name: Publish to PowerShell Gallery
+
+# Publishes module/IntuneTenantCloneKit to the PowerShell Gallery when a version tag is pushed.
+# The tag (e.g. v1.0.0) must match ModuleVersion in the .psd1.
+# Requires a repository secret named PSGALLERY_API_KEY (PowerShell Gallery API key).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build module functions from en/ scripts
+        shell: pwsh
+        run: |
+          pwsh ./module/Build-Module.ps1
+          Get-ChildItem ./module/IntuneTenantCloneKit/Public -Filter *.ps1 | Select-Object Name
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          Set-PSResourceRepository -Name PSGallery -Trusted -ErrorAction SilentlyContinue
+          Install-Module Microsoft.Graph.Authentication -Force -Scope CurrentUser -AllowClobber
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Validate manifest & tag/version match
+        shell: pwsh
+        run: |
+          $manifestPath = './module/IntuneTenantCloneKit/IntuneTenantCloneKit.psd1'
+          $m = Test-ModuleManifest -Path $manifestPath
+          Write-Host "Manifest OK: $($m.Name) $($m.Version)"
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+              $tag = ($env:GITHUB_REF -replace '^refs/tags/v', '')
+              if ($tag -ne $m.Version.ToString()) {
+                  throw "Tag v$tag does not match ModuleVersion $($m.Version) in the manifest. Bump the manifest or re-tag."
+              }
+              Write-Host "Tag matches ModuleVersion ($tag)."
+          }
+
+      - name: PSScriptAnalyzer (errors only)
+        shell: pwsh
+        run: |
+          $issues = Invoke-ScriptAnalyzer -Path ./module/IntuneTenantCloneKit -Recurse -Severity Error
+          if ($issues) { $issues | Format-Table -AutoSize; throw "PSScriptAnalyzer reported errors." }
+          Write-Host "PSScriptAnalyzer: no errors."
+
+      - name: Publish to PowerShell Gallery
+        shell: pwsh
+        env:
+          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+        run: |
+          if (-not $env:PSGALLERY_API_KEY) { throw "PSGALLERY_API_KEY secret is not set." }
+          Publish-Module -Path ./module/IntuneTenantCloneKit -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
+          Write-Host "Published."

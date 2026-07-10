@@ -19,3 +19,6 @@
 *.log
 .DS_Store
 Thumbs.db
+
+# Generated module functions (single source of truth = en/ scripts; rebuilt by module/Build-Module.ps1 / CI)
+module/IntuneTenantCloneKit/Public/

@@ -22,6 +22,7 @@ $allow = @(
   '00000000-0000-0000-0000-000000000000',
   '11111111-1111-1111-1111-111111111111',
   '00000003-0000-0000-c000-000000000000',   # Microsoft Graph (well-known public appId)
+  '2dfaf5e5-83c3-4d11-97b5-edc8c1a1bd89',   # IntuneTenantCloneKit module GUID (public manifest id)
   'source.onmicrosoft.com','target.onmicrosoft.com',
   'contoso.example.com','admin@contoso.example.com',
   'noreply@example.com'

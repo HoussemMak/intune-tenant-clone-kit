@@ -2,7 +2,7 @@
 
 # intune-tenant-clone-kit
 
-![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-5391FE.svg?logo=powershell&logoColor=white) ![Microsoft Graph](https://img.shields.io/badge/Microsoft%20Graph-beta-0078D4.svg) ![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-5391FE.svg?logo=powershell&logoColor=white) ![Microsoft Graph](https://img.shields.io/badge/Microsoft%20Graph-beta-0078D4.svg) ![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg) ![PSGallery](https://img.shields.io/powershellgallery/v/IntuneTenantCloneKit?logo=powershell&label=PSGallery&color=5391FE)
 
 **Reliably clone a Microsoft Intune configuration from one tenant to another (SOURCE → TARGET).**
 
@@ -62,6 +62,18 @@ Copy-Item config.example.ps1 config.ps1
 ```
 
 Details, root causes and troubleshooting: [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) · [`docs/SEQUENCE.md`](docs/SEQUENCE.md) (execution sequence).
+
+## Install as a module (PowerShell Gallery)
+
+```powershell
+Install-Module IntuneTenantCloneKit -Scope CurrentUser
+Import-Module IntuneTenantCloneKit
+Get-Command -Module IntuneTenantCloneKit
+```
+
+The module wraps the **same logic** as the `scripts/` files, exposed as approved-verb cmdlets
+(`Export-IntuneConfiguration`, `Import-IntuneConfiguration`, `Compare-IntuneExport`, `Test-IntuneExport`, …).
+Prefer the step-by-step scripts if you want to read and trace every action. See [`../module/README.md`](../module/README.md).
 
 ## AI assist (optional, experimental)
 
