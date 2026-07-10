@@ -129,6 +129,14 @@ foreach ($cat in $fam) {
             $name = [string]$obj.($cat.N)
             if ([string]::IsNullOrWhiteSpace($name)) { $name = [string]$obj.displayName }
             if ([string]::IsNullOrWhiteSpace($name)) { $name = [string]$obj.name }
+            # Warn when a script/remediation body is empty (=> SKIP_EMPTY at import: rehydrate first).
+            if ($cat.F -in @('04_ScriptsPowerShell','05_ScriptsShell') -and [string]::IsNullOrEmpty([string]$obj.scriptContent)) {
+                $warn.Add("[$($cat.F)] empty scriptContent : $($obj.id) / $name (SKIP_EMPTY at import)")
+            }
+            if ($cat.F -eq '06_Remediations') {
+                if ([string]::IsNullOrEmpty([string]$obj.detectionScriptContent))   { $warn.Add("[$($cat.F)] empty detectionScriptContent : $($obj.id) / $name") }
+                if ([string]::IsNullOrEmpty([string]$obj.remediationScriptContent)) { $warn.Add("[$($cat.F)] empty remediationScriptContent : $($obj.id) / $name") }
+            }
             Save-Obj -Dir $dir -Name $name -Id ([string]$obj.id) -Obj $obj
             $n++
         } catch { $warn.Add("[$($cat.F)] item $($o.id) FAILED : $($_.Exception.Message)") }

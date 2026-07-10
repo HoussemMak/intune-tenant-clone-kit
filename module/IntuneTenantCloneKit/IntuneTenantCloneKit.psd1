@@ -40,10 +40,17 @@
             ProjectUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit'
             ReleaseNotes = @'
 1.0.2
-- Hardening (no behaviour change): normalise the last pagination helper (Get-AllValues in
-  Import-IntuneConfiguration) from ",$all" to "return $all". Its only caller already piped
-  "| ForEach-Object" so it was safe, but this removes the last instance of the collapse-prone
-  idiom for defence in depth.
+- Idempotence hardening: match existing target objects by a composite key (name + @odata.type /
+  platform) instead of name alone, and update the seen-set after each CREATE. Prevents duplicates
+  and wrong skips for same-name objects of different types (e.g. an app published as iosVppApp and
+  androidManagedStoreApp, or iOS vs iOSMobileApplicationManagement filters).
+- AppConfigurations: remap targetedMobileApps (source app IDs -> target) via AppIdMap when
+  -AppIdMapPath is supplied; SKIP_UNMAPPED instead of POSTing source-tenant IDs invalid in the target.
+- Import macOS shell scripts (deviceShellScripts / 05_ScriptsShell), previously exported but not imported.
+- Export now warns when a script/remediation body is empty (surfaces the eventual SKIP_EMPTY early).
+- Unattended orchestrator: post-export guard aborts before any target write if the export is empty or
+  carries the export-bug signature (invalid URL / failed families).
+- Also normalises the last ",$all" pagination helper (Get-AllValues) to "return $all" (defence in depth).
 
 1.0.1
 - FIX (blocker): the Graph pagination helper Get-All returned ",$all", which the callers

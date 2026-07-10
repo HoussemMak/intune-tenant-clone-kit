@@ -257,6 +257,26 @@ function Invoke-Step {
 # --------------------------------------------------------------------------
 # Etapes metier
 # --------------------------------------------------------------------------
+function Assert-GoodExport {
+    # Garde-fou : bloque AVANT toute ecriture cible si l'export est vide ou porte la signature du bug
+    # d'export (URL invalide / familles KO). Empeche un run "reussi" mais trompeur.
+    param([Parameter(Mandatory)][string]$Path)
+    $manifestPath = Join-Path $Path 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) { throw "Garde-fou export : manifest.json absent dans $Path. Import interrompu." }
+    $mf = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $total = 0
+    foreach ($fam in @($mf.Families)) { if ($fam.PSObject.Properties.Name -contains 'Count') { $total += [int]$fam.Count } }
+    $warnPath = Join-Path $Path 'export_warnings.txt'
+    if (Test-Path -LiteralPath $warnPath) {
+        $w = Get-Content -LiteralPath $warnPath -Raw
+        if ($w -match 'The provided URL is not valid|liste KO|element .* KO') {
+            throw "Garde-fou export : $warnPath contient des erreurs Graph/URL (signature du bug d'export). Import interrompu."
+        }
+    }
+    if ($total -le 0) { throw "Garde-fou export : 0 objet exporte. Export vide, import interrompu. Voir $Path\export_warnings.txt." }
+    Write-Ok ("Export valide : {0} objets." -f $total)
+}
+
 function Invoke-Export {
     if ($SourcePath) {
         if (-not (Test-Path -LiteralPath (Join-Path $SourcePath 'manifest.json'))) { throw "SourcePath sans manifest.json : $SourcePath" }
@@ -269,7 +289,7 @@ function Invoke-Export {
     Invoke-Step -Name 'Etape 1 - Export FRAIS depuis la SOURCE (lecture seule)' -Critical -LogPath '' -Action {
         Connect-Tenant -TenantId $SourceTenantId -Label 'SOURCE' -Scopes @('DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All','DeviceManagementServiceConfig.Read.All','DeviceManagementRBAC.Read.All')
         & $Exporter -SourceTenantId $SourceTenantId -OutputPath $out
-        if (-not (Test-Path -LiteralPath (Join-Path $out 'manifest.json'))) { throw 'Export incomplet : manifest.json absent.' }
+        Assert-GoodExport -Path $out
         $script:ActiveSource = $out
         if ($RecoverSecrets -and (Test-Path $RecoverSec)) { Write-Info 'Recuperation des secrets OMA depuis la source...'; & $RecoverSec -ExportPath $out -SourceTenantId $SourceTenantId -AssumeYes }
     }
@@ -325,7 +345,7 @@ function Invoke-Wave {
     if (-not $Preview) { $extra['Execute'] = $true }
     Invoke-Step -Name ("Etape 5 - Import vague : {0}{1}" -f $Phase, $(if($Preview){' (PREVIEW)'}else{''})) -LogPath $log -Action {
         Connect-Tenant -TenantId $TargetTenantId -Label 'CIBLE'
-        & $Engine -SourcePath $script:ActiveSource -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase $Phase -LogPath $log @extra }
+        & $Engine -SourcePath $script:ActiveSource -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase $Phase -AppIdMapPath (Join-Path $LogsDir 'AppIdMap.csv') -LogPath $log @extra }
     $err = Get-StatusCount -CsvPath $log -Status 'ERROR'
     if ($err -gt 0 -and $StopOnImportErrors) { throw "Import $Phase : $err erreur(s) et -StopOnImportErrors actif." }
 }

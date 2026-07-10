@@ -50,12 +50,20 @@ param(
     [switch]$Execute,
     [switch]$IncludeScopeTags,
     [string]$NamePrefix = '',
+    [string]$AppIdMapPath = '',
     [string]$LogPath = (Join-Path (Get-Location) ("logs\import_v3_{0}.csv" -f (Get-Date -Format 'yyyyMMdd_HHmmss')))
 )
 
 $ErrorActionPreference = 'Stop'
 $GraphBase = 'https://graph.microsoft.com/beta'
 $script:Results = New-Object System.Collections.Generic.List[object]
+
+# SourceId -> TargetId app map (to remap targetedMobileApps in AppConfigurations).
+$script:AppIdMap = @{}
+if ($AppIdMapPath -and (Test-Path -LiteralPath $AppIdMapPath)) {
+    try { Import-Csv -LiteralPath $AppIdMapPath | ForEach-Object { if ($_.SourceId) { $script:AppIdMap[[string]$_.SourceId] = [string]$_.TargetId } } }
+    catch { Write-Host ("  [!] AppIdMap unreadable ({0}) : {1}" -f $AppIdMapPath,$_.Exception.Message) -ForegroundColor Yellow }
+}
 
 # App types NOT clonable by metadata alone (binary content / license) -> manual.
 $AppTypesManual = @(
@@ -68,16 +76,17 @@ $AppTypesManual = @(
 
 # Catalog: folder -> endpoint, name property, phase, fields to remove on create.
 $Catalog = @(
-    @{ Folder='07_Filters';               Path='deviceManagement/assignmentFilters';                 Name='displayName'; Phase='Foundation'; Strip=@('id','createdDateTime','lastModifiedDateTime','payloads','assignments','exportWarnings') }
+    @{ Folder='07_Filters';               Path='deviceManagement/assignmentFilters';                 Name='displayName'; Phase='Foundation'; Key='platform';     Strip=@('id','createdDateTime','lastModifiedDateTime','payloads','assignments','exportWarnings') }
     @{ Folder='08_ScopeTags';             Path='deviceManagement/roleScopeTags';                      Name='displayName'; Phase='Foundation'; Strip=@('id','isBuiltIn','exportWarnings') }
-    @{ Folder='09_Apps';                  Path='deviceAppManagement/mobileApps';                      Name='displayName'; Phase='Apps';       Strip=@('id','createdDateTime','lastModifiedDateTime','uploadState','publishingState','isAssigned','dependentAppCount','supersedingAppCount','supersededAppCount','committedContentVersion','size','assignments','revokeLicenseActionResults','exportWarnings'); Special='App' }
-    @{ Folder='01_DeviceConfigurations';  Path='deviceManagement/deviceConfigurations';               Name='displayName'; Phase='Policies';   Strip=@('id','createdDateTime','lastModifiedDateTime','version','supportsScopeTags','assignments','exportWarnings'); Special='DeviceConfig' }
+    @{ Folder='09_Apps';                  Path='deviceAppManagement/mobileApps';                      Name='displayName'; Phase='Apps';       Key='@odata.type'; Strip=@('id','createdDateTime','lastModifiedDateTime','uploadState','publishingState','isAssigned','dependentAppCount','supersedingAppCount','supersededAppCount','committedContentVersion','size','assignments','revokeLicenseActionResults','exportWarnings'); Special='App' }
+    @{ Folder='01_DeviceConfigurations';  Path='deviceManagement/deviceConfigurations';               Name='displayName'; Phase='Policies';   Key='@odata.type'; Strip=@('id','createdDateTime','lastModifiedDateTime','version','supportsScopeTags','assignments','exportWarnings'); Special='DeviceConfig' }
     @{ Folder='02_ConfigurationPolicies'; Path='deviceManagement/configurationPolicies';              Name='name';        Phase='Policies';   Strip=@('id','createdDateTime','lastModifiedDateTime','settingCount','assignments','isAssigned','exportWarnings'); Special='SettingsCatalog' }
-    @{ Folder='03_CompliancePolicies';    Path='deviceManagement/deviceCompliancePolicies';           Name='displayName'; Phase='Policies';   Strip=@('id','createdDateTime','lastModifiedDateTime','version','assignments','exportWarnings'); Special='Compliance' }
+    @{ Folder='03_CompliancePolicies';    Path='deviceManagement/deviceCompliancePolicies';           Name='displayName'; Phase='Policies';   Key='@odata.type'; Strip=@('id','createdDateTime','lastModifiedDateTime','version','assignments','exportWarnings'); Special='Compliance' }
     @{ Folder='04_ScriptsPowerShell';     Path='deviceManagement/deviceManagementScripts';            Name='displayName'; Phase='Scripts';    Strip=@('id','createdDateTime','lastModifiedDateTime','assignments','exportWarnings'); Special='Script' }
+    @{ Folder='05_ScriptsShell';          Path='deviceManagement/deviceShellScripts';                 Name='displayName'; Phase='Scripts';    Strip=@('id','createdDateTime','lastModifiedDateTime','assignments','exportWarnings'); Special='Script' }
     @{ Folder='06_Remediations';          Path='deviceManagement/deviceHealthScripts';                Name='displayName'; Phase='Scripts';    Strip=@('id','createdDateTime','lastModifiedDateTime','highestAvailableVersion','isGlobalScript','assignments','exportWarnings'); Special='Remediation' }
-    @{ Folder='10_AppConfigurations';     Path='deviceAppManagement/mobileAppConfigurations';         Name='displayName'; Phase='Mobile';     Strip=@('id','createdDateTime','lastModifiedDateTime','version','assignments','exportWarnings') }
-    @{ Folder='11_AppProtection';         Path='deviceAppManagement/managedAppPolicies';              Name='displayName'; Phase='Mobile';     Strip=@('id','createdDateTime','lastModifiedDateTime','version','deployedAppCount','assignments','exportWarnings') }
+    @{ Folder='10_AppConfigurations';     Path='deviceAppManagement/mobileAppConfigurations';         Name='displayName'; Phase='Mobile';     Key='@odata.type'; Strip=@('id','createdDateTime','lastModifiedDateTime','version','assignments','exportWarnings'); Special='AppConfig' }
+    @{ Folder='11_AppProtection';         Path='deviceAppManagement/managedAppPolicies';              Name='displayName'; Phase='Mobile';     Key='@odata.type'; Strip=@('id','createdDateTime','lastModifiedDateTime','version','deployedAppCount','assignments','exportWarnings') }
     @{ Folder='12_AutopilotProfiles';     Path='deviceManagement/windowsAutopilotDeploymentProfiles'; Name='displayName'; Phase='Mobile';     Strip=@('id','createdDateTime','lastModifiedDateTime','managementServiceAppId','assignments','exportWarnings') }
     @{ Folder='13_NotificationTemplates'; Path='deviceManagement/notificationMessageTemplates';       Name='displayName'; Phase='Mobile';     Strip=@('id','lastModifiedDateTime','localizedNotificationMessages','exportWarnings'); Special='Notification' }
     @{ Folder='17_FeatureUpdateProfiles'; Path='deviceManagement/windowsFeatureUpdateProfiles'; Name='displayName'; Phase='Policies';   Strip=@('id','createdDateTime','lastModifiedDateTime','assignments','exportWarnings','deployableContentDisplayName','endOfSupportDate') }
@@ -106,6 +115,23 @@ function Assert-Target {
 }
 
 function Read-JsonFile { param($Path) (Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json -AsHashtable -Depth 100 }
+
+function Get-IdempotencyKey {
+    # Idempotence key: name (+ type/platform discriminator when $Cat.Key is defined). Avoids false
+    # EXISTS / duplicates on same-name objects of different types (e.g. iosVppApp vs androidManagedStoreApp,
+    # iOS vs iOSMobileApplicationManagement filters). ".$prop" access works for SOURCE (hashtable) and
+    # TARGET (Graph object). $NameOverride lets the caller pass the already-prefixed name.
+    param($Obj,$Cat,[string]$NameOverride)
+    if ($NameOverride) { $name = $NameOverride }
+    else {
+        $name = [string]($Obj.$($Cat.Name))
+        if (-not $name) { $name = [string]($Obj.displayName) }
+        if (-not $name) { $name = [string]($Obj.name) }
+    }
+    $key = $name.ToLowerInvariant()
+    if ($Cat.Key) { $key = $key + '|' + ([string]($Obj.$($Cat.Key))).ToLowerInvariant() }
+    return $key
+}
 
 function Get-AllValues {
     param($Path)
@@ -217,6 +243,20 @@ function Build-Payload {
             if ($AppTypesManual -contains $t) { throw "SKIP_MANUAL : app type not clonable ($t)." }
             return (New-GenericPayload -O $O -Cat $Cat)
         }
+        'AppConfig' {
+            # Remap targetedMobileApps (SOURCE app IDs -> target) via AppIdMap.csv; SKIP if unmapped
+            # (otherwise we would POST PROD app IDs that are invalid in the target tenant).
+            if ($AppIdMapPath -and $O.ContainsKey('targetedMobileApps') -and @($O['targetedMobileApps']).Count -gt 0) {
+                $mapped = @()
+                foreach ($sid in @($O['targetedMobileApps'])) {
+                    $tid = $script:AppIdMap[[string]$sid]
+                    if ([string]::IsNullOrWhiteSpace($tid)) { throw "SKIP_UNMAPPED : source app $sid has no target equivalent in AppIdMap.csv -> config not imported." }
+                    $mapped += $tid
+                }
+                $O['targetedMobileApps'] = @($mapped)
+            }
+            return (New-GenericPayload -O $O -Cat $Cat)
+        }
         'RoleDefinition' {
             if ($O['isBuiltIn'] -or $O['isBuiltInRoleDefinition']) { throw 'SKIP_BUILTIN : built-in role definition (not creatable).' }
             return (New-GenericPayload -O $O -Cat $Cat)
@@ -246,18 +286,23 @@ foreach ($cat in $selected) {
     Write-Host ""
     Write-Host ("--- {0} ({1} file(s)) ---" -f $cat.Folder,$files.Count) -ForegroundColor Cyan
 
-    # Idempotence: existing names in the target
-    $existing = @()
-    try { $existing = @(Get-AllValues -Path $cat.Path | ForEach-Object { $_.$($cat.Name) } | Where-Object { $_ } | ForEach-Object { $_.ToString().ToLowerInvariant() }) }
-    catch { Write-Host ("  [!] Cannot read existing items ({0}) : {1}" -f $cat.Path,$_.Exception.Message) -ForegroundColor Yellow }
+    # Idempotence: existing keys (name + type/platform discriminator) in the target
+    $existingKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+    try {
+        foreach ($e in @(Get-AllValues -Path $cat.Path)) {
+            $k = Get-IdempotencyKey -Obj $e -Cat $cat
+            if ($k) { [void]$existingKeys.Add($k) }
+        }
+    } catch { Write-Host ("  [!] Cannot read existing items ({0}) : {1}" -f $cat.Path,$_.Exception.Message) -ForegroundColor Yellow }
 
     foreach ($f in $files) {
         $obj  = Read-JsonFile $f.FullName
         $name = if ($obj[$cat.Name]) { [string]$obj[$cat.Name] } elseif ($obj['displayName']) { [string]$obj['displayName'] } else { [string]$obj['name'] }
         if ($NamePrefix) { $name = $NamePrefix + $name }
+        $key  = Get-IdempotencyKey -Obj $obj -Cat $cat -NameOverride $name
 
-        if ($existing -contains $name.ToLowerInvariant()) {
-            Add-Result $cat.Folder $name 'EXISTS' 'Same name already present' $null $null
+        if ($existingKeys.Contains($key)) {
+            Add-Result $cat.Folder $name 'EXISTS' 'Same key (name+type) already present' $null $null
             Write-Host ("  [=] {0}" -f $name) -ForegroundColor DarkGray
             continue
         }
@@ -283,6 +328,7 @@ foreach ($cat in $selected) {
             $json = $payload | ConvertTo-Json -Depth 100
             $created = Invoke-MgGraphRequest -Method POST -Uri "$GraphBase/$($cat.Path)" -Body $json -ContentType 'application/json'
             Add-Result $cat.Folder $name 'CREATED' '' $created.id $null
+            [void]$existingKeys.Add($key)   # avoid a duplicate if 2 source files share the same key in one run
             Write-Host ("  [+] {0}" -f $name) -ForegroundColor Green
 
             # Notification templates: POST localized messages after creation
