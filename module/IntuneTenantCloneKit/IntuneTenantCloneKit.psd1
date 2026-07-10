@@ -1,6 +1,6 @@
 @{
     RootModule           = 'IntuneTenantCloneKit.psm1'
-    ModuleVersion        = '1.0.0'
+    ModuleVersion        = '1.0.1'
     GUID                 = '2dfaf5e5-83c3-4d11-97b5-edc8c1a1bd89'
     Author               = 'Houmak'
     CompanyName          = 'Minerva IA'
@@ -39,6 +39,14 @@
             LicenseUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit'
             ReleaseNotes = @'
+1.0.1
+- FIX (blocker): the Graph pagination helper Get-All returned ",$all", which the callers
+  collapsed with "@(Get-All ...)" into a single-element array. The per-family foreach then
+  iterated once over the WHOLE collection, so the per-item id became a space-joined list and
+  the per-item URL became "endpoint/<id1> <id2> ...", failing with "The provided URL is not
+  valid" and exporting 0 objects (except single-item families). Now streams "return $all".
+  Affected: Export-IntuneConfiguration and Copy-IntuneAssignment.
+
 1.0.0
 - First PowerShell Gallery release of the intune-tenant-clone-kit as a module.
 - Core cmdlets: Export-IntuneConfiguration, Import-IntuneConfiguration (settings inline,

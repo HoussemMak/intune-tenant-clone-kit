@@ -60,10 +60,14 @@ function Get-All {
     $all = @(); $u = "$B/$RelPath"
     do {
         $r = Invoke-MgGraphRequest -Method GET -Uri $u
-        if ($r.value) { $all += $r.value } elseif ($r.id) { $all += $r }
+        if ($r.value) { $all += @($r.value) } elseif ($r.id) { $all += $r }
         $u = $r.'@odata.nextLink'
     } while ($u)
-    ,$all
+    # IMPORTANT : streamer les elements ($all), PAS ",$all". Avec ",$all", le "@(Get-All ...)"
+    # de l'appelant re-emballe le tableau en UN seul element => le foreach n'itere qu'une fois
+    # sur toute la collection ($o = tous les objets), $o.id = liste jointe, l'URL par item devient
+    # "endpoint/<id1> <id2> ..." => "The provided URL is not valid" et 0 objet exporte.
+    return $all
 }
 
 function Save-Obj {

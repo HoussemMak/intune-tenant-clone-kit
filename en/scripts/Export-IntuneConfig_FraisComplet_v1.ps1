@@ -60,10 +60,14 @@ function Get-All {
     $all = @(); $u = "$B/$RelPath"
     do {
         $r = Invoke-MgGraphRequest -Method GET -Uri $u
-        if ($r.value) { $all += $r.value } elseif ($r.id) { $all += $r }
+        if ($r.value) { $all += @($r.value) } elseif ($r.id) { $all += $r }
         $u = $r.'@odata.nextLink'
     } while ($u)
-    ,$all
+    # IMPORTANT: stream the elements ($all), NOT ",$all". With ",$all" the caller's "@(Get-All ...)"
+    # re-wraps the collection into a SINGLE element, so the foreach iterates only once over the whole
+    # collection ($o = every object), $o.id becomes a space-joined list, and the per-item URL becomes
+    # "endpoint/<id1> <id2> ..." => "The provided URL is not valid" and 0 objects exported.
+    return $all
 }
 
 function Save-Obj {

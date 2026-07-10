@@ -153,11 +153,13 @@ function Get-All {
     $all = @(); $u = "$GraphBase/$RelPath"
     do {
         $r = Invoke-MgGraphRequest -Method GET -Uri $u
-        if     ($r.value) { $all += $r.value }
+        if     ($r.value) { $all += @($r.value) }
         elseif ($r.id)    { $all += $r }
         $u = $r.'@odata.nextLink'
     } while ($u)
-    ,$all
+    # Stream the elements ($all), not ",$all": otherwise "@(Get-All ...)" re-wraps the collection into
+    # a single element and the foreach iterates only once (same bug as Export FraisComplet v1).
+    return $all
 }
 
 function Get-Prop { param($Obj,[string]$Prop) if ($null -eq $Obj) { return $null }; return $Obj.$Prop }
