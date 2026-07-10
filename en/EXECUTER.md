@@ -24,8 +24,8 @@ function Show-Tenant($expect){ $c=Get-MgContext; $o=$null; try{$o=(Invoke-MgGrap
   Write-Host ("--> CONNECTED TO : {0}   (TenantId {1})" -f $o.displayName,$c.TenantId) -ForegroundColor Cyan
   Write-Host ("    Account      : {0}" -f $c.Account) -ForegroundColor Cyan
   Write-Host ("    EXPECTED     : {0}" -f $expect) -ForegroundColor Yellow }
-function Connect-Source { Disconnect-MgGraph -EA SilentlyContinue|Out-Null; Connect-MgGraph -TenantId $SourceTenantId -Scopes $ScopesRead -NoWelcome; Show-Tenant "SOURCE — admin account @ $SourceDomain (read-only)" }
-function Connect-Target { Disconnect-MgGraph -EA SilentlyContinue|Out-Null; Connect-MgGraph -TenantId $TargetTenantId -Scopes $Scopes     -NoWelcome; Show-Tenant "TARGET — admin account @ $TargetDomain (write)" }
+function Connect-Source { Disconnect-MgGraph -EA SilentlyContinue|Out-Null; $p=@{TenantId=$SourceTenantId;Scopes=$ScopesRead;NoWelcome=$true}; if($SourceAppId){$p.ClientId=$SourceAppId}; Connect-MgGraph @p; Show-Tenant "SOURCE — admin account @ $SourceDomain (read-only)" }
+function Connect-Target { Disconnect-MgGraph -EA SilentlyContinue|Out-Null; $p=@{TenantId=$TargetTenantId;Scopes=$Scopes;NoWelcome=$true}; if($TargetAppId){$p.ClientId=$TargetAppId}; Connect-MgGraph @p; Show-Tenant "TARGET — admin account @ $TargetDomain (write)" }
 function Assert-Source  { if((Get-MgContext).TenantId -ne $SourceTenantId){throw 'STOP: not connected to SOURCE tenant'}; 'OK SOURCE' }
 function Assert-Target  { if((Get-MgContext).TenantId -ne $TargetTenantId){throw 'STOP: not connected to TARGET tenant'};  'OK TARGET' }
 ```

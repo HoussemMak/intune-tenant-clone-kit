@@ -34,6 +34,12 @@ $CertThumbprint = ''
 # Optionnel (mode manuel legacy) : App registration pour Connect-MgGraph interactif.
 $AppId          = ''
 
+# App registration PAR TENANT (optionnelle) pour le mode MANUEL (delegue / interactif). A utiliser si
+# chaque tenant a SA propre app cliente publique approuvee pour la connexion. Vide = app Microsoft
+# Graph PowerShell par defaut (multi-tenant). (Le zero-touch utilise SourceClientId/TargetClientId.)
+$SourceAppId = ''   # ClientId delegue approuve dans le tenant SOURCE
+$TargetAppId = ''   # ClientId delegue approuve dans le tenant CIBLE
+
 # ----------------------------------------------------------------------------
 #  ASSISTANT IA (optionnel, expérimental) — utilisé par scripts\Invoke-IntuneAIAssist.ps1
 #  Rédige des runbooks/scaffolds de recréation pour les éléments non importables automatiquement.

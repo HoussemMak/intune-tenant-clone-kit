@@ -34,6 +34,12 @@ $CertThumbprint = ''
 # Optional (legacy manual mode): App registration for interactive Connect-MgGraph.
 $AppId          = ''
 
+# Optional PER-TENANT app registration for the MANUAL (delegated / interactive) mode. Use these if
+# each tenant has its OWN approved public-client app for sign-in. Empty = default Microsoft Graph
+# PowerShell app (works cross-tenant). (Zero-touch uses SourceClientId/TargetClientId above instead.)
+$SourceAppId = ''   # delegated ClientId approved in the SOURCE tenant
+$TargetAppId = ''   # delegated ClientId approved in the TARGET tenant
+
 # ----------------------------------------------------------------------------
 #  AI ASSIST (optional, experimental) — used by scripts\Invoke-IntuneAIAssist.ps1
 #  Drafts recreation runbooks/scaffolds for items the kit cannot auto-import.
