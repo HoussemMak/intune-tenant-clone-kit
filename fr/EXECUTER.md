@@ -17,8 +17,8 @@ $Stamp=(Get-Date -f yyyy-MM-dd_HHmm)
 $Src="$Kit\input\Export_$Stamp"; $Fixed=$Src; $Logs="$Kit\logs"; $Backup="$Kit\backup_$Stamp"
 $Report="$Kit\input\import-report.txt"           # (optionnel) rapport d'un import précédent échoué, pour l'étape de nettoyage
 $Pkg="$Kit\scripts"; $Engine="$Pkg\Import-IntuneConfig_Corrige_v3.ps1"; $Exporter="$Pkg\Export-IntuneConfig_FraisComplet_v1.ps1"
-$Scopes    =@('DeviceManagementConfiguration.ReadWrite.All','DeviceManagementApps.ReadWrite.All','DeviceManagementServiceConfig.ReadWrite.All','DeviceManagementRBAC.ReadWrite.All','DeviceManagementManagedDevices.ReadWrite.All')
-$ScopesRead=@('DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All','DeviceManagementServiceConfig.Read.All','DeviceManagementRBAC.Read.All')
+$Scopes    =@('DeviceManagementConfiguration.ReadWrite.All','DeviceManagementApps.ReadWrite.All','DeviceManagementServiceConfig.ReadWrite.All','DeviceManagementRBAC.ReadWrite.All','DeviceManagementManagedDevices.ReadWrite.All','Policy.ReadWrite.ConditionalAccess')
+$ScopesRead=@('DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All','DeviceManagementServiceConfig.Read.All','DeviceManagementRBAC.Read.All','Policy.Read.All')
 
 function Show-Tenant($expect){ $c=Get-MgContext; $o=$null; try{$o=(Invoke-MgGraphRequest GET 'https://graph.microsoft.com/v1.0/organization').value[0]}catch{}
   Write-Host ("--> CONNECTE A : {0}   (TenantId {1})" -f $o.displayName,$c.TenantId) -ForegroundColor Cyan
@@ -139,3 +139,19 @@ Connect-Source ; Assert-Source
 # APERÇU par défaut ; ajouter -Execute uniquement sur un tenant bac à sable.
 & "$Pkg\Publish-IntuneApp.ps1" -AppMetadataJson .\app.json -IntuneWinFile .\app.intunewin -TargetTenantId $TargetTenantId
 ```
+
+### Vérifier l'intégrité de l'export (optionnel) — hors-ligne
+```powershell
+# Contrôle SHA-256 de l'export : signale les fichiers modifiés / manquants / non suivis. Sans Graph.
+& "$Pkg\Verify-IntuneExport.ps1" -Path $Fixed
+```
+
+### Comparer deux exports — dérive (optionnel) — hors-ligne
+```powershell
+# Ce qui a changé entre deux exports (ajouté / retiré / modifié par objet), ex. avant vs après.
+& "$Pkg\Compare-IntuneExport.ps1" -Reference .\input\Export_old -Difference $Fixed -OutputJson "$Logs\drift.json"
+```
+
+> **Import de test sans collision de noms** : ajoutez `-NamePrefix "[Migré] "` à n'importe quelle vague
+> d'import pour créer les objets avec un préfixe (essai contre un tenant déjà peuplé), ex.
+> `& $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Policies -Execute -NamePrefix "[Migré] "`

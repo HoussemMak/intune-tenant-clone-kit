@@ -40,7 +40,7 @@ Full **export → correct → import** cycle.
 
 | ✅ Automated | ⏸️ Manual (Intune limits) |
 |---|---|
-| Settings Catalog, configuration profiles, compliance, scripts, remediations, filters, scope tags, Store apps, app config, app protection, Autopilot, notifications, groups + assignments, Windows Update (rings + Feature/Quality/Driver profiles), Terms & Conditions, Device categories, custom RBAC roles | Secrets (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA), LOB/Win32/VPP apps (binaries), Admin Templates, Endpoint Security (intents), Enrollment, **Device Inventory policies** |
+| Settings Catalog, configuration profiles, compliance, scripts, remediations, filters, scope tags, Store apps, app config, app protection, Autopilot, notifications, groups + assignments, Windows Update (rings + Feature/Quality/Driver profiles), Terms & Conditions, Device categories, custom RBAC roles, Conditional Access (created disabled) | Secrets (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA), LOB/Win32/VPP apps (binaries), Admin Templates, Endpoint Security (intents), Enrollment, **Device Inventory policies** |
 
 > 📌 Full list of what is **not** cloned (and how to handle each item): [`LIMITATIONS.md`](LIMITATIONS.md).
 
@@ -80,6 +80,9 @@ the API key is yours (set in `config.ps1`, git-ignored) and is never shipped wit
   local binary + metadata (create app → content version → SAS → block upload → commit).
 - **`scripts/Invoke-IntunePortalCaptureToScript.ps1`** — turn a portal capture (Device Inventory, gated
   endpoints) into an AI-drafted, review-first recreation script.
+
+- **`scripts/Verify-IntuneExport.ps1`** — offline integrity check of an export (SHA-256 `checksums.json`): flags modified / missing / untracked files.
+- **`scripts/Compare-IntuneExport.ps1`** — drift comparison between two exports (added / removed / changed per object, severity-ranked).
 
 ## Structure
 

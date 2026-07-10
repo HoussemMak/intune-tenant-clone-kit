@@ -33,7 +33,7 @@ Le kit énumère un ensemble fixe d'endpoints Intune ; tout ce qui est en dehors
 
 ## Hors périmètre par nature
 
-- Politiques **Conditional Access** — elles relèvent de **Microsoft Entra ID**, pas d'Intune.
+- **Conditional Access** — désormais exporté/importé **best-effort** : chaque politique est **créée DÉSACTIVÉE**, et ses références (utilisateurs, groupes, apps, emplacements nommés) sont des **IDs du tenant source à remapper** avant activation. Nécessite `Policy.Read.All` / `Policy.ReadWrite.ConditionalAccess`.
 - **Appareils, utilisateurs, hashes matériels Autopilot, rapports / données d'inventaire** — données
   d'exécution, pas de la configuration.
 

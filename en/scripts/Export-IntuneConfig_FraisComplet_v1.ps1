@@ -102,6 +102,7 @@ $fam = @(
   @{ F='20_TermsAndConditions';    P='deviceManagement/termsAndConditions';            N='displayName' }
   @{ F='21_DeviceCategories';      P='deviceManagement/deviceCategories';              N='displayName' }
   @{ F='22_RoleDefinitions';       P='deviceManagement/roleDefinitions';               N='displayName' }
+  @{ F='23_ConditionalAccess';    P='identity/conditionalAccess/policies';               N='displayName' }
 )
 
 Write-Host "Families :" -ForegroundColor Yellow
@@ -151,3 +152,13 @@ if ($warn.Count -gt 0) {
     $warn | Set-Content -LiteralPath $wf -Encoding UTF8
     Write-Host ("Warnings : {0} (see {1})" -f $warn.Count, $wf) -ForegroundColor Yellow
 }
+
+
+# --- Integrity: SHA-256 checksums of every exported file (Verify-IntuneExport.ps1) ---
+$sums = [ordered]@{}
+Get-ChildItem $OutputPath -Recurse -File | Where-Object { $_.Name -ne 'checksums.json' } | Sort-Object FullName | ForEach-Object {
+    $rel = ($_.FullName.Substring($OutputPath.Length).TrimStart('','/')) -replace '\','/'
+    $sums[$rel] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+}
+($sums | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath (Join-Path $OutputPath 'checksums.json') -Encoding UTF8
+Write-Host ("Checksums   : {0} file(s) (checksums.json)" -f $sums.Count) -ForegroundColor Cyan

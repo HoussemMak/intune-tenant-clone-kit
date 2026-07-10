@@ -17,8 +17,8 @@ $Stamp=(Get-Date -f yyyy-MM-dd_HHmm)
 $Src="$Kit\input\Export_$Stamp"; $Fixed=$Src; $Logs="$Kit\logs"; $Backup="$Kit\backup_$Stamp"
 $Report="$Kit\input\import-report.txt"           # (optional) report of a previous failed import, for the cleanup step
 $Pkg="$Kit\scripts"; $Engine="$Pkg\Import-IntuneConfig_Corrige_v3.ps1"; $Exporter="$Pkg\Export-IntuneConfig_FraisComplet_v1.ps1"
-$Scopes    =@('DeviceManagementConfiguration.ReadWrite.All','DeviceManagementApps.ReadWrite.All','DeviceManagementServiceConfig.ReadWrite.All','DeviceManagementRBAC.ReadWrite.All','DeviceManagementManagedDevices.ReadWrite.All')
-$ScopesRead=@('DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All','DeviceManagementServiceConfig.Read.All','DeviceManagementRBAC.Read.All')
+$Scopes    =@('DeviceManagementConfiguration.ReadWrite.All','DeviceManagementApps.ReadWrite.All','DeviceManagementServiceConfig.ReadWrite.All','DeviceManagementRBAC.ReadWrite.All','DeviceManagementManagedDevices.ReadWrite.All','Policy.ReadWrite.ConditionalAccess')
+$ScopesRead=@('DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All','DeviceManagementServiceConfig.Read.All','DeviceManagementRBAC.Read.All','Policy.Read.All')
 
 function Show-Tenant($expect){ $c=Get-MgContext; $o=$null; try{$o=(Invoke-MgGraphRequest GET 'https://graph.microsoft.com/v1.0/organization').value[0]}catch{}
   Write-Host ("--> CONNECTED TO : {0}   (TenantId {1})" -f $o.displayName,$c.TenantId) -ForegroundColor Cyan
@@ -139,3 +139,19 @@ Connect-Source ; Assert-Source
 # PREVIEW by default; add -Execute only on a sandbox tenant.
 & "$Pkg\Publish-IntuneApp.ps1" -AppMetadataJson .\app.json -IntuneWinFile .\app.intunewin -TargetTenantId $TargetTenantId
 ```
+
+### Verify export integrity (optional) — offline
+```powershell
+# SHA-256 integrity check of the export: flags modified / missing / untracked files. No Graph needed.
+& "$Pkg\Verify-IntuneExport.ps1" -Path $Fixed
+```
+
+### Compare two exports — drift (optional) — offline
+```powershell
+# What changed between two exports (added / removed / changed per object), e.g. before vs after.
+& "$Pkg\Compare-IntuneExport.ps1" -Reference .\input\Export_old -Difference $Fixed -OutputJson "$Logs\drift.json"
+```
+
+> **Safe test import without name collisions**: add `-NamePrefix "[Migrated] "` to any import wave to
+> create objects with a prefix (dry-run against an already-populated tenant), e.g.
+> `& $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Policies -Execute -NamePrefix "[Migrated] "`

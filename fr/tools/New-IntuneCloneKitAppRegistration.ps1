@@ -59,12 +59,12 @@ if (-not $DisplayName) { $DisplayName = "IntuneCloneKit-$Role" }
 $PermsSource = @(
     'DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All',
     'DeviceManagementServiceConfig.Read.All','DeviceManagementRBAC.Read.All',
-    'DeviceManagementManagedDevices.Read.All','Group.Read.All','Organization.Read.All'
+    'DeviceManagementManagedDevices.Read.All','Group.Read.All','Organization.Read.All','Policy.Read.All'
 )
 $PermsTarget = @(
     'DeviceManagementConfiguration.ReadWrite.All','DeviceManagementApps.ReadWrite.All',
     'DeviceManagementServiceConfig.ReadWrite.All','DeviceManagementRBAC.ReadWrite.All',
-    'DeviceManagementManagedDevices.ReadWrite.All','Group.ReadWrite.All','Organization.Read.All'
+    'DeviceManagementManagedDevices.ReadWrite.All','Group.ReadWrite.All','Organization.Read.All','Policy.ReadWrite.ConditionalAccess'
 )
 $Perms = if ($Role -eq 'Source') { $PermsSource } else { $PermsTarget }
 

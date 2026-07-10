@@ -49,6 +49,7 @@ param(
     [ValidateSet('Foundation','Apps','Policies','Scripts','Mobile','All')][string]$Phase = 'All',
     [switch]$Execute,
     [switch]$IncludeScopeTags,
+    [string]$NamePrefix = '',
     [string]$LogPath = (Join-Path (Get-Location) ("logs\import_v3_{0}.csv" -f (Get-Date -Format 'yyyyMMdd_HHmmss')))
 )
 
@@ -85,6 +86,7 @@ $Catalog = @(
     @{ Folder='20_TermsAndConditions';    Path='deviceManagement/termsAndConditions';            Name='displayName'; Phase='Mobile';     Strip=@('id','createdDateTime','lastModifiedDateTime','assignments','exportWarnings','modifiedDateTime') }
     @{ Folder='21_DeviceCategories';      Path='deviceManagement/deviceCategories';              Name='displayName'; Phase='Foundation'; Strip=@('id','exportWarnings') }
     @{ Folder='22_RoleDefinitions';       Path='deviceManagement/roleDefinitions';               Name='displayName'; Phase='Foundation'; Strip=@('id','createdDateTime','lastModifiedDateTime','exportWarnings'); Special='RoleDefinition' }
+    @{ Folder='23_ConditionalAccess';    Path='identity/conditionalAccess/policies';               Name='displayName'; Phase='Policies';   Strip=@('id','createdDateTime','modifiedDateTime','templateId','exportWarnings'); Special='ConditionalAccess' }
 )
 
 function Add-Result {
@@ -217,6 +219,10 @@ function Build-Payload {
             if ($O['isBuiltIn'] -or $O['isBuiltInRoleDefinition']) { throw 'SKIP_BUILTIN : built-in role definition (not creatable).' }
             return (New-GenericPayload -O $O -Cat $Cat)
         }
+        'ConditionalAccess' {
+            $O['state'] = 'disabled'   # create disabled for safety; references are source-tenant IDs to remap
+            return (New-GenericPayload -O $O -Cat $Cat)
+        }
         default { return (New-GenericPayload -O $O -Cat $Cat) }
     }
 }
@@ -246,6 +252,7 @@ foreach ($cat in $selected) {
     foreach ($f in $files) {
         $obj  = Read-JsonFile $f.FullName
         $name = if ($obj[$cat.Name]) { [string]$obj[$cat.Name] } elseif ($obj['displayName']) { [string]$obj['displayName'] } else { [string]$obj['name'] }
+        if ($NamePrefix) { $name = $NamePrefix + $name }
 
         if ($existing -contains $name.ToLowerInvariant()) {
             Add-Result $cat.Folder $name 'EXISTS' 'Same name already present' $null $null
@@ -260,6 +267,8 @@ foreach ($cat in $selected) {
             Write-Host ("  [~] {0} -- {1}" -f $name,$reason) -ForegroundColor Yellow
             continue
         }
+
+        if ($NamePrefix -and $payload.Contains($cat.Name)) { $payload[$cat.Name] = $name }
 
         if (-not $Execute) {
             $extra = if ($cat.Special -eq 'SettingsCatalog') { "settings=$((@($payload['settings'])).Count)" } else { '' }

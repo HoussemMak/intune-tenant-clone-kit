@@ -40,7 +40,7 @@ Cycle complet **export → correction → import**.
 
 | ✅ Automatisé | ⏸️ Manuel (limites Intune) |
 |---|---|
-| Settings Catalog, Profils de configuration, Conformité, Scripts, Remédiations, Filtres, Scope tags, Apps Store, App Config, App Protection, Autopilot, Notifications, Groupes + affectations, Windows Update (anneaux + profils Feature/Quality/Driver), Termes & conditions, Catégories d'appareils, rôles RBAC personnalisés | Secrets (Wi-Fi/PSK, AppLocker/WDAC, OMA chiffré), Apps LOB/Win32/VPP (binaires), Admin Templates, Endpoint Security (intents), Enrollment, **Device Inventory policies** |
+| Settings Catalog, Profils de configuration, Conformité, Scripts, Remédiations, Filtres, Scope tags, Apps Store, App Config, App Protection, Autopilot, Notifications, Groupes + affectations, Windows Update (anneaux + profils Feature/Quality/Driver), Termes & conditions, Catégories d'appareils, rôles RBAC personnalisés, Conditional Access (créée désactivée) | Secrets (Wi-Fi/PSK, AppLocker/WDAC, OMA chiffré), Apps LOB/Win32/VPP (binaires), Admin Templates, Endpoint Security (intents), Enrollment, **Device Inventory policies** |
 
 > 📌 Liste complète de ce qui n'est **pas** cloné (et comment gérer chaque élément) : [`LIMITATIONS.md`](LIMITATIONS.md).
 
@@ -82,6 +82,9 @@ jamais livrée avec le kit.
   depuis un binaire local + métadonnées (création app → content version → SAS → upload par blocs → commit).
 - **`scripts/Invoke-IntunePortalCaptureToScript.ps1`** — transforme une capture portail (Device Inventory,
   endpoints gatés) en script de recréation rédigé par l'IA (revue d'abord).
+
+- **`scripts/Verify-IntuneExport.ps1`** — contrôle d'intégrité hors-ligne d'un export (`checksums.json` SHA-256) : signale les fichiers modifiés / manquants / non suivis.
+- **`scripts/Compare-IntuneExport.ps1`** — comparaison de dérive entre deux exports (ajouté / retiré / modifié par objet, classé par sévérité).
 
 ## Structure
 

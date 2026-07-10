@@ -33,7 +33,7 @@ Recreate these at the portal, or handle them with a dedicated tool.
 
 ## Out of scope by design
 
-- **Conditional Access** policies — these belong to **Microsoft Entra ID**, not Intune.
+- **Conditional Access** — now exported/imported **best-effort**: each policy is **created DISABLED**, and its references (users, groups, apps, named locations) are **source-tenant IDs to remap** before enabling. Needs `Policy.Read.All` / `Policy.ReadWrite.ConditionalAccess`.
 - **Devices, users, Autopilot hardware hashes, reports / inventory data** — runtime data, not configuration.
 
 ## Handled, but tenant-dependent
