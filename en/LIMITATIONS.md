@@ -16,9 +16,11 @@ target tenant.
 >
 > 1. **Cloned automatically** — ~20 configuration families are exported *and* re-imported (coverage table in
 >    [`README.md`](README.md)).
-> 2. **Exported, but recreated by hand** — Admin Templates (ADMX), Endpoint Security intents and Enrollment
->    are captured by the export but **not** by the import engine; the reconciliation report surfaces each as
->    **`OutOfScope`**, so nothing is silently dropped.
+> 2. **Imported (experimental), or recreated by hand** — Admin Templates (ADMX) and Enrollment are now
+>    re-imported by an **experimental, fail-closed, PREVIEW-by-default** engine (new in v2.3.0 — see the
+>    caveat below); **legacy Endpoint Security intents** stay manual (the `intents` API is frozen — modern
+>    Endpoint Security already clones via the Settings Catalog family). Whatever is not re-created is surfaced
+>    by the reconciliation report as **`OutOfScope`**, so nothing is silently dropped.
 > 3. **Never crossed — the cryptographic ceiling** — encrypted secrets (the export never carries the clear
 >    value), third-party tokens & connectors (APNs / Apple ADE·VPP / Managed Google Play / NDES), device
 >    identities & Autopilot hardware hashes, and app binaries & store/VPP licences.
@@ -39,10 +41,28 @@ target tenant.
 | **Encrypted secrets** (Wi-Fi/PSK, VPN, custom OMA-URI with `secretReferenceValueId`, AppLocker/WDAC blobs) | Intune never exports a secret value in clear text; the reference pointer is tenant-specific. | `Recover-IntuneOmaSecrets.ps1` (or the orchestrator's `-RecoverSecrets`) pulls the clear value from the source and re-injects it — no re-typing (needs source read rights); otherwise recreate and re-enter the secret. |
 | **LOB / Win32 / VPP apps** | The installer binary (`.intunewin`, package, VPP token) is not part of the exported JSON metadata. | Provide the binary; `Publish-IntuneApp.ps1` (experimental) orchestrates the Win32 `.intunewin` upload, then re-map assignments. |
 
+## Imported — EXPERIMENTAL (Admin Templates & Enrollment)
+
+> 🧪 **EXPERIMENTAL — run in PREVIEW first.** New in **v2.3.0**, the Admin Templates (ADMX) and Enrollment
+> import paths have **not been validated by the maintainers against a real tenant.** **Run them in PREVIEW
+> mode first, test on a sandbox tenant, then please
+> [open a feedback issue](https://github.com/HoussemMak/intune-tenant-clone-kit/issues).** Both paths are
+> **fail-closed** and **PREVIEW by default**: an unresolved or ambiguous case is **skipped, never guessed**.
+> This is still **not** a "full migration" — the honest positioning is unchanged.
+
+As of **v2.3.0** two families that used to be export-only are now re-created by the import engine — but
+**experimentally** (see the caveat above). This is a best-effort, **skip-and-flag** re-creation, and every
+skipped object is still surfaced by the reconciliation report as **`OutOfScope`**.
+
+| Object type | Export folder | What imports | What is skipped (fail-closed) |
+|---|---|---|---|
+| **Administrative Templates (ADMX)** (`groupPolicyConfigurations`) | `14_AdminTemplates` | Each policy is re-created, remapping its **definition / presentation references by attributes** (name, class, category path) across tenants instead of by tenant-specific ID. | Any value whose definition or presentation cannot be resolved **unambiguously** on the target is refused as **`SKIP_UNRESOLVED_DEF`** — never written blind with a guessed ID. |
+| **Enrollment configurations** (`deviceEnrollmentConfigurations`) | `16_Enrollment` | Only the **creatable, targeted** profiles: Enrollment Status Page (ESP), device-limit, single-platform enrollment restriction, and notifications. Existing target **priorities are never reordered**. | Tenant **defaults**, **priority-0** and **singletons** (Windows Hello, co-management, windows-restore) are **skipped**; a **legacy combined platform restriction** is skipped as **`SKIP_FLAG_REVIEW`** (raised as security-critical for human review). |
+
 ## Exported, but NOT re-imported automatically (manual re-import)
 
-The families below **are captured by the export**, but are **not part of the import catalog** (`$Catalog`),
-so the import engine never re-creates them — recreate them by hand in the target tenant. They are **not**
+The family below **is captured by the export**, but is **not part of the import catalog** (`$Catalog`),
+so the import engine never re-creates it — recreate it by hand in the target tenant. It is **not**
 "missing" from your export: the **reconciliation report** (`reconcile.json` / `.html` / `.csv`) lists every
 such object with the outcome **`OutOfScope`** (counted, never silently dropped). An OutOfScope **Endpoint
 Security** object — or any object whose name contains *baseline* — additionally raises the
@@ -51,13 +71,12 @@ critical policy is never mistaken for "all clear".
 
 | Object type | Export folder | Why not re-imported | What to do |
 |---|---|---|---|
-| **Administrative Templates (ADMX)** | `14_AdminTemplates` | Not handled by the Settings Catalog import engine; absent from the import catalog. | Recreate at the portal (or migrate them to the Settings Catalog). |
-| **Endpoint Security intents / baselines** | `15_EndpointSecurity` | The `intents` template model is not covered by the import engine; absent from the import catalog. | Recreate at the portal. Listed `OutOfScope`; baselines also flagged security-critical. |
-| **Enrollment configurations** | `16_Enrollment` | Tenant-specific enrollment restrictions / status pages; absent from the import catalog. | Recreate at the portal. |
+| **Endpoint Security intents / baselines** (legacy) | `15_EndpointSecurity` | The legacy `intents` template API is **frozen by Microsoft (~2025-03)** and absent from the import catalog. **Modern** Endpoint Security already clones through the **Settings Catalog** family (`02_`); only the legacy intents stay manual. | Recreate the legacy intents at the portal (or migrate them to the Settings Catalog). Listed `OutOfScope`; baselines also flagged security-critical. |
 
-> 🤖 These three families are exactly the **manual gap** the opt-in AI assistant targets: point
-> `Invoke-IntuneAIAssist.ps1` at the export for a review-first recreation runbook + Graph scaffolds in
-> `ai-output/`. It bridges the toil (drafts the steps and scripts) — it never writes to your tenant.
+> 🤖 This still-manual family — plus the bucket-3 items above — is exactly the **manual gap** the opt-in AI
+> assistant targets: point `Invoke-IntuneAIAssist.ps1` at the export for a review-first recreation runbook +
+> Graph scaffolds in `ai-output/`. It bridges the toil (drafts the steps and scripts) — it never writes to
+> your tenant.
 
 ## Other configuration types not cloned
 

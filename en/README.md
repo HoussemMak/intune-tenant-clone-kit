@@ -86,15 +86,33 @@ verification (it no longer just compares object counts), and paginates backup/ve
 
 | ✅ Automated (re-imported) | ⏸️ Manual |
 |---|---|
-| Settings Catalog, configuration profiles, compliance, scripts, remediations, filters, scope tags, Store apps, app config, app protection, Autopilot, notifications, groups + assignments, Windows Update (rings + Feature/Quality/Driver profiles), Terms & Conditions, Device categories, custom RBAC roles, Conditional Access (created disabled) | **Not exported:** Secrets (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA), LOB/Win32/VPP apps (binaries), Device Inventory policies. **Exported but NOT re-imported:** Admin Templates, Endpoint Security (intents), Enrollment. |
+| Settings Catalog, configuration profiles, compliance, scripts, remediations, filters, scope tags, Store apps, app config, app protection, Autopilot, notifications, groups + assignments, Windows Update (rings + Feature/Quality/Driver profiles), Terms & Conditions, Device categories, custom RBAC roles, Conditional Access (created disabled), **Admin Templates / ADMX — 🧪 experimental**, **Enrollment — 🧪 experimental** | **Not exported:** Secrets (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA), LOB/Win32/VPP apps (binaries), Device Inventory policies. **Exported but NOT re-imported:** Endpoint Security (intents). |
 
 > 📌 Full list of what is **not** cloned (and how to handle each item): [`LIMITATIONS.md`](LIMITATIONS.md).
 >
-> ℹ️ **Admin Templates (`14_`), Endpoint Security intents (`15_`) and Enrollment (`16_`) are _exported_ but
-> are **not** in the import catalog** — the import engine never re-creates them, so recreate them manually in
-> the target. The **reconciliation report** lists every such object as **`OutOfScope`** (counted, never
-> silently dropped); an OutOfScope Endpoint Security object — or any object whose name contains *baseline* —
-> additionally raises the **security-critical** banner (non-zero reconciliation exit code under `-Execute`).
+> 🧪 **Experimental (new in v2.3.0) — Admin Templates & Enrollment import.** These two families are now
+> re-imported, but the import path is **experimental and has _not_ been validated by the maintainers against
+> a live tenant.** **Run it in PREVIEW first, test on a sandbox tenant, then please
+> [open a feedback issue](https://github.com/HoussemMak/intune-tenant-clone-kit/issues).** Both paths are
+> **fail-closed and PREVIEW by default** — an unresolved or ambiguous case is skipped, never guessed. This is
+> still **not** a "full migration": the honest positioning is unchanged.
+>
+> ℹ️ **Per family:**
+> - **Admin Templates (`14_`, ADMX / `groupPolicyConfigurations`) — imported (experimental).** Each value's
+>   definition/presentation is **remapped by attributes** across tenants; a value whose definition is
+>   unresolved or ambiguous is skipped as **`SKIP_UNRESOLVED_DEF`** (fail-closed — never written blind).
+> - **Enrollment (`16_`, `deviceEnrollmentConfigurations`) — imported (experimental), skip-and-flag.** Only
+>   the **creatable, targeted** profiles are created (ESP, device-limit, single-platform restriction,
+>   notifications). Tenant **defaults**, **priority-0** and **singletons** (Windows Hello, co-management,
+>   windows-restore) are **skipped**; existing target **priorities are never reordered**; a **legacy combined
+>   platform restriction** is skipped as **`SKIP_FLAG_REVIEW`** (raised as security-critical for human review).
+> - **Endpoint Security intents (`15_`) — still manual (not imported).** The legacy *intents* API is
+>   **frozen (~2025-03)**; **modern** Endpoint Security already imports through the **Settings Catalog family
+>   (`02_`)**, so the legacy intents stay a **manual / AI-assist** step, surfaced as **`OutOfScope`**.
+>
+> The **reconciliation report** counts every such object (never silently dropped); an OutOfScope Endpoint
+> Security object — or any object whose name contains *baseline* — additionally raises the
+> **security-critical** banner (non-zero reconciliation exit code under `-Execute`).
 
 ## Security posture
 
@@ -135,7 +153,7 @@ Details, root causes and troubleshooting: [`docs/METHODOLOGY.md`](docs/METHODOLO
 
 ## Install as a module (PowerShell Gallery)
 
-Published on the PowerShell Gallery — current stable **v2.1.0** (P0 security hardening + reconciliation report):
+Published on the PowerShell Gallery (see the version badge above for the current release):
 
 ```powershell
 Install-Module IntuneTenantCloneKit -Scope CurrentUser

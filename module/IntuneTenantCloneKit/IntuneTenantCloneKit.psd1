@@ -1,6 +1,6 @@
 @{
     RootModule           = 'IntuneTenantCloneKit.psm1'
-    ModuleVersion        = '2.2.0'
+    ModuleVersion        = '2.3.0'
     GUID                 = '2dfaf5e5-83c3-4d11-97b5-edc8c1a1bd89'
     Author               = 'Houmak'
     CompanyName          = 'Minerva IA'
@@ -39,6 +39,19 @@
             LicenseUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit'
             ReleaseNotes = @'
+2.3.0  (EXPERIMENTAL: ADMX + Enrollment import)
+- EXPERIMENTAL - run in PREVIEW first; community feedback welcome. The import now covers two families
+  that were previously export-only. All fail-closed, PREVIEW by default, never writes to the source.
+- Administrative Templates / ADMX (groupPolicyConfigurations): the configuration is created, then each
+  definitionValue is posted with its definition/presentation @odata.bind remapped BY ATTRIBUTES (never a
+  source id); an unresolved or ambiguous definition/presentation skips the value (SKIP_UNRESOLVED_DEF).
+- Enrollment (deviceEnrollmentConfigurations): only creatable targeted profiles (ESP, device limit,
+  single-platform restriction, notifications) are created; tenant defaults / priority-0 / singletons
+  (Windows Hello, co-management, windows-restore) are skipped; existing target priorities are never
+  reordered (setPriority is never called); a legacy combined platform-restriction is flagged for review.
+- Endpoint Security: no importer - the intents API is frozen (~2025-03). Modern Endpoint Security already
+  flows through the Settings Catalog family; legacy intents stay manual / AI-assist (reported OutOfScope).
+
 2.2.0  (resilience, honest verification, coverage & docs)
 - 429/503/504 backoff: throttled/transient Graph responses are retried (Retry-After + exponential
   backoff) across export, import, assignments and the unattended orchestrator.

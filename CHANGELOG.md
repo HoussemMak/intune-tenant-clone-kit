@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > re-enroll and secrets/tokens re-pair (a cryptographic ceiling no tool crosses).
 > We clone the configuration; we guide the rest.
 
+## [2.3.0] — 2026-07-11
+
+> ⚠️ **Experimental.** The new ADMX and Enrollment import writes to the target tenant. It is fail-closed
+> and **PREVIEW by default**, but has not been tested by the maintainers on a live tenant — **run in
+> PREVIEW first, then `-Execute` on a sandbox, and please open an issue with feedback.**
+
+### Added
+- **ADMX / Administrative Templates import** (`14_AdminTemplates` → `groupPolicyConfigurations`). Export
+  enriched with `definitionValues`; import creates the configuration then posts each value with its
+  definition/presentation `@odata.bind` remapped **by attributes** (never a source id). An unresolved or
+  ambiguous definition/presentation skips the whole value (`SKIP_UNRESOLVED_DEF`).
+- **Enrollment import** (`16_Enrollment` → `deviceEnrollmentConfigurations`), skip-and-flag. Only creatable
+  targeted profiles (ESP, device limit, single-platform restriction, notifications) are created; tenant
+  defaults / priority-0 / singletons (Windows Hello, co-management, windows-restore) are skipped; target
+  priorities are never reordered; a legacy combined platform-restriction is `SKIP_FLAG_REVIEW` (surfaced as
+  security-critical).
+
+### Notes
+- **Endpoint Security** (`15_EndpointSecurity`): no importer — the `intents` API is frozen (~2025-03).
+  Modern Endpoint Security already imports via the Settings Catalog family; legacy intents remain
+  manual / AI-assist and are reported as `OutOfScope`.
+
 ## [2.2.0] — 2026-07-11
 
 ### Added

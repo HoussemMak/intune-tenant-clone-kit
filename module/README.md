@@ -10,8 +10,7 @@ Import-Module IntuneTenantCloneKit
 Get-Command -Module IntuneTenantCloneKit
 ```
 
-> **v2.1.0** is published on the PowerShell Gallery (P0 security hardening + the reconciliation
-> report). It clones the **clonable Intune configuration** tenant-to-tenant — devices re-enroll and
+> The module is published on the PowerShell Gallery (see the page for the current version). It clones the **clonable Intune configuration** tenant-to-tenant — devices re-enroll and
 > secrets/tokens re-pair (a cryptographic ceiling no tool crosses). We clone the configuration; we
 > guide the rest — see [`en/LIMITATIONS.md`](../en/LIMITATIONS.md).
 

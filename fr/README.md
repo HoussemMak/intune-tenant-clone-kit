@@ -78,7 +78,7 @@ vérification (plus de troncature `?$top=999`).
 
 | ✅ Automatisé (réimporté) | ⏸️ Manuel |
 |---|---|
-| Settings Catalog, Profils de configuration, Conformité, Scripts, Remédiations, Filtres, Scope tags, Apps Store, App Config, App Protection, Autopilot, Notifications, Groupes + affectations, Windows Update (anneaux + profils Feature/Quality/Driver), Termes & conditions, Catégories d'appareils, rôles RBAC personnalisés, Conditional Access (créée désactivée) | **Exportés mais NON réimportés** (à recréer à la main, remontés `OutOfScope`) : Admin Templates (`14_`), Endpoint Security intents (`15_`), Enrollment (`16_`). |
+| Settings Catalog, Profils de configuration, Conformité, Scripts, Remédiations, Filtres, Scope tags, Apps Store, App Config, App Protection, Autopilot, Notifications, Groupes + affectations, Windows Update (anneaux + profils Feature/Quality/Driver), Termes & conditions, Catégories d'appareils, rôles RBAC personnalisés, Conditional Access (créée désactivée), **Admin Templates / ADMX — 🧪 expérimental**, **Enrollment — 🧪 expérimental** | **Exportés mais NON réimportés** (à recréer à la main, remonté `OutOfScope`) : Endpoint Security intents (`15_`). |
 
 **Non clonés (plafond cryptographique)** — aucun outil ne les fait traverser : secrets (Wi-Fi/VPN/PFX,
 OMA chiffré), jetons & connecteurs Apple/Google (APNs/ADE/VPP/Managed Google Play/NDES), identités
@@ -86,12 +86,32 @@ d'appareils & empreintes matérielles Autopilot, binaires d'apps (`.intunewin`) 
 
 > 📌 Liste complète de ce qui n'est **pas** cloné (et comment gérer chaque élément) : [`LIMITATIONS.md`](LIMITATIONS.md).
 >
-> ℹ️ **Admin Templates (`14_`), Endpoint Security intents (`15_`) et Enrollment (`16_`) sont _exportés_ mais
-> **ne figurent pas** dans le catalogue d'import** — le moteur d'import ne les recrée jamais ; à recréer
-> manuellement dans la cible. Le **rapport de réconciliation** liste chacun de ces objets en **`OutOfScope`**
-> (comptabilisés, jamais abandonnés en silence) ; un objet Endpoint Security OutOfScope — ou tout objet dont
-> le nom contient *baseline* — lève en plus la bannière **sécurité-critique** (code de sortie de
-> réconciliation non nul en mode `-Execute`).
+> 🧪 **Expérimental (nouveau en v2.3.0) — import Admin Templates & Enrollment.** Ces deux familles sont
+> désormais réimportées, mais ce chemin d'import est **expérimental et n'a _pas_ été validé par les
+> mainteneurs sur un vrai tenant.** **Lancez-le d'abord en PREVIEW, testez sur un tenant bac à sable, puis
+> ouvrez un [ticket de retour](https://github.com/HoussemMak/intune-tenant-clone-kit/issues).** Les deux
+> chemins sont **fail-closed et en PREVIEW par défaut** — un cas non résolu ou ambigu est ignoré, jamais
+> deviné. Ce n'est toujours **pas** une « migration complète » : le positionnement honnête ne change pas.
+>
+> ℹ️ **Par famille :**
+> - **Admin Templates (`14_`, ADMX / `groupPolicyConfigurations`) — importé (expérimental).** Chaque valeur
+>   voit sa définition/présentation **remappée par attributs** d'un tenant à l'autre ; une valeur dont la
+>   définition est non résolue ou ambiguë est ignorée en **`SKIP_UNRESOLVED_DEF`** (fail-closed — jamais
+>   écrite à l'aveugle).
+> - **Enrollment (`16_`, `deviceEnrollmentConfigurations`) — importé (expérimental), skip-and-flag.** Seuls
+>   les profils **créables et ciblés** sont créés (ESP, limite d'appareils, restriction mono-plateforme,
+>   notifications). Les **défauts** du tenant, la **priorité 0** et les **singletons** (Windows Hello,
+>   co-management, windows-restore) sont **ignorés** ; les **priorités** cibles ne sont **jamais réordonnées** ;
+>   une **restriction de plateforme legacy combinée** est ignorée en **`SKIP_FLAG_REVIEW`** (remontée comme
+>   sécurité-critique pour revue humaine).
+> - **Endpoint Security intents (`15_`) — reste manuel (non importé).** L'API legacy des *intents* est
+>   **gelée (~2025-03)** ; l'Endpoint Security **moderne** s'importe déjà via la **famille Settings Catalog
+>   (`02_`)**, donc les intents legacy restent une étape **manuelle / assistée par IA**, remontée en
+>   **`OutOfScope`**.
+>
+> Le **rapport de réconciliation** comptabilise chacun de ces objets (jamais abandonné en silence) ; un objet
+> Endpoint Security OutOfScope — ou tout objet dont le nom contient *baseline* — lève en plus la bannière
+> **sécurité-critique** (code de sortie de réconciliation non nul en mode `-Execute`).
 
 ![Ce qui se clone vs. ce qui se re-jumelle — en un coup d'œil](../assets/overview.png)
 
@@ -193,5 +213,3 @@ Ce bundle **ne contient aucune donnée réelle de tenant**. Les vraies données 
 ## Licence
 
 [MIT](../LICENSE).
-</content>
-</invoke>
