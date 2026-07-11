@@ -58,6 +58,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $GraphBase = 'https://graph.microsoft.com/beta'
 $script:Results = New-Object System.Collections.Generic.List[object]
+$script:SourceFileCount = 0        # P1-1: independent count of SOURCE files enumerated per processed folder (real completeness guard)
+$script:SourceSeenCount = 0        # P1-1: count of SOURCE objects actually iterated (completeness invariant)
+$script:ReconExitCode   = 0        # P1-1: 2 => security-critical NOT applied (set at the very end, -Execute only)
+$script:RemapLog        = $null    # P1-1: per-object old->new id remap trail (reset in the file loop)
 
 # SourceId -> TargetId app map (to remap targetedMobileApps in AppConfigurations).
 $script:AppIdMap = @{}
@@ -140,10 +144,23 @@ $Catalog = @(
 )
 
 function Add-Result {
-    param($Family,$Name,$Status,$Reason,$GraphId,$Err)
+    # P1-1 enriched record. Historical columns (Timestamp/Family/Name/Status/Reason/GraphId/Error) are
+    # kept VERBATIM for CSV backward-compat; the new columns describe RESULTS (backend-neutral):
+    #   SourceName  = non-prefixed source name,  AppliedName = name actually pushed (prefixed),
+    #   IdentityKey = logical key on the non-prefixed source name,  TargetId = the target id (== GraphId),
+    #   Remap       = array of {kind,oldId,newId} (default @()).
+    param($Family,$Name,$Status,$Reason,$GraphId,$Err,$SourceName,$AppliedName,$IdentityKey,$Remap=@())
+    if (-not $SourceName)  { $SourceName  = $Name }
+    if (-not $AppliedName) { $AppliedName = $Name }
+    # Normalize Remap to an object[] WITHOUT the @() operator: @() on a List[object] throws
+    # "Argument types do not match" on PowerShell 7.5 / .NET 9 (RemapLog is a List).
+    $remapAcc = [System.Collections.Generic.List[object]]::new()
+    if ($null -ne $Remap) { foreach ($__r in $Remap) { [void]$remapAcc.Add($__r) } }
     $script:Results.Add([pscustomobject]@{
         Timestamp=(Get-Date).ToString('o'); Family=$Family; Name=$Name; Status=$Status
         Reason=$Reason; GraphId=$GraphId; Error=$Err
+        SourceName=$SourceName; AppliedName=$AppliedName; IdentityKey=$IdentityKey
+        TargetId=$GraphId; Remap=$remapAcc.ToArray()
     })
 }
 
@@ -289,6 +306,7 @@ function Resolve-CaRefList {
             throw "SKIP_UNRESOLVED_CA_REF : $Slot reference '$s' has no target mapping (CaIdMap) -> CA policy refused (fail-closed)."
         }
         $out += $t; [void]$script:CaEmitted.Add([string]$t)
+        if ($null -ne $script:RemapLog) { [void]$script:RemapLog.Add([pscustomobject]@{ kind=$Slot; oldId=$s; newId=[string]$t }) }  # P1-1 remap trail
     }
     return ,@($out)
 }
@@ -385,6 +403,7 @@ function Build-Payload {
                     $tid = $script:AppIdMap[[string]$sid]
                     if ([string]::IsNullOrWhiteSpace($tid)) { throw "SKIP_UNMAPPED : source app $sid has no target equivalent in AppIdMap.csv -> config not imported." }
                     $mapped += $tid
+                    if ($null -ne $script:RemapLog) { [void]$script:RemapLog.Add([pscustomobject]@{ kind='targetedMobileApps'; oldId=[string]$sid; newId=$tid }) }  # P1-1 remap trail
                 }
                 $O['targetedMobileApps'] = @($mapped)
             }
@@ -404,6 +423,158 @@ function Build-Payload {
     }
 }
 
+# ---- P1-1 Reconciliation report (the durable differentiator; describes RESULTS, not transport) -----
+function ConvertTo-HtmlText { param([string]$s) if ($null -eq $s) { return '' } ($s -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;' -replace '"','&quot;') }
+
+function Get-CanonicalOutcome {
+    # Map a raw engine Status to a canonical, backend-neutral OUTCOME.
+    param([string]$Status)
+    switch -Regex ($Status) {
+        '^EXISTS$'              { 'Matched' ; break }
+        '^CREATED(-DISABLED)?$' { 'Created' ; break }
+        '^ERROR$'               { 'Failed'  ; break }
+        '^PREVIEW$'             { 'Preview' ; break }
+        '^(SKIP.*|BLOCKED)$'    { 'Skipped' ; break }
+        default                 { 'Skipped' }
+    }
+}
+
+function Write-Reconciliation {
+    # Emit reconcile.json / reconcile.html / reconcile.csv next to the CSV log ($LogPath). Result-centric,
+    # backend-neutral. Enforces the completeness invariant and raises the SECURITY-CRITICAL banner + exit 2.
+    $reconDir = Split-Path -Parent $LogPath
+    if (-not $reconDir) { $reconDir = (Get-Location).Path }
+    if (-not (Test-Path $reconDir)) { New-Item -ItemType Directory -Force -Path $reconDir | Out-Null }
+    $jsonPath = Join-Path $reconDir 'reconcile.json'
+    $htmlPath = Join-Path $reconDir 'reconcile.html'
+    $csvPath  = Join-Path $reconDir 'reconcile.csv'
+
+    # 1) Canonical records from the engine results (exclude '/msg' transport sub-records).
+    $canon = @(foreach ($r in @($script:Results | Where-Object { $_.Family -notlike '*/msg' })) {
+        [pscustomobject]@{
+            family=$r.Family; sourceName=$r.SourceName; appliedName=$r.AppliedName
+            identityKey=$r.IdentityKey; outcome=(Get-CanonicalOutcome $r.Status); reason=$r.Reason
+            targetId=$r.TargetId; remap=@($r.Remap); timestamp=$r.Timestamp; status=$r.Status
+        }
+    })
+
+    # 2) OutOfScope: folders PRESENT in the export but ABSENT from $Catalog (no endpoint mapping).
+    $catalogFolders = @($Catalog | ForEach-Object { $_.Folder })
+    $outRecords = @()
+    if (Test-Path -LiteralPath $SourcePath) {
+        foreach ($d in @(Get-ChildItem -LiteralPath $SourcePath -Directory -ErrorAction SilentlyContinue)) {
+            if ($catalogFolders -contains $d.Name) { continue }
+            foreach ($jf in @(Get-ChildItem -LiteralPath $d.FullName -Filter *.json -File -ErrorAction SilentlyContinue)) {
+                $sn = $jf.BaseName
+                try { $o = Read-JsonFile $jf.FullName; if ($o['displayName']) { $sn=[string]$o['displayName'] } elseif ($o['name']) { $sn=[string]$o['name'] } } catch {}
+                $outRecords += [pscustomobject]@{
+                    family=$d.Name; sourceName=$sn; appliedName=$sn; identityKey=''
+                    outcome='OutOfScope'; reason='Folder present in export but absent from import Catalog (no endpoint mapping)'
+                    targetId=''; remap=@(); timestamp=(Get-Date).ToString('o'); status='OUTOFSCOPE'
+                }
+            }
+        }
+    }
+    $allCanon = @($canon) + @($outRecords)
+
+    # 3) Completeness invariant: every SOURCE object seen == exactly one outcome (OutOfScope included).
+    $seen = $script:SourceFileCount + @($outRecords).Count
+    $invariantOK = (@($allCanon).Count -eq $seen)
+
+    # 4) Summary counts per canonical outcome.
+    $summary = [ordered]@{}
+    foreach ($o in @('Matched','Created','Failed','Skipped','Preview','OutOfScope')) { $summary[$o] = 0 }
+    foreach ($grp in ($allCanon | Group-Object outcome)) { $summary[$grp.Name] = $grp.Count }
+
+    # 5) SECURITY-CRITICAL: Special = Compliance|ConditionalAccess, or a security baseline (name *aseline*).
+    $specialByFolder = @{}
+    foreach ($c in $Catalog) { if ($c.Special) { $specialByFolder[$c.Folder] = $c.Special } }
+    $criticalNotApplied = @(foreach ($r in $allCanon) {
+        $sp = $specialByFolder[$r.family]
+        $isCrit = ($sp -eq 'Compliance' -or $sp -eq 'ConditionalAccess' `
+            -or $r.family -match '(?i)EndpointSecurity|Baseline' `
+            -or $r.sourceName -like '*aseline*' -or $r.appliedName -like '*aseline*')
+        if (-not $isCrit) { continue }
+        # OutOfScope counts too: a security-critical object silently dropped (not in $Catalog) must NOT read as "all clear".
+        if (($r.outcome -in @('Failed','Skipped','OutOfScope')) -or ($r.status -eq 'CREATED-DISABLED')) { $r }
+    })
+
+    # ---- reconcile.json ----
+    $doc = [ordered]@{
+        schemaVersion='1.0'; backend='graph-beta'; generatedAt=(Get-Date).ToString('o')
+        phase=$Phase; target=$TargetTenantId; summary=$summary
+        records=@($allCanon | ForEach-Object {
+            [ordered]@{
+                family=$_.family; sourceName=$_.sourceName; appliedName=$_.appliedName
+                identityKey=$_.identityKey; outcome=$_.outcome; reason=$_.reason
+                targetId=$_.targetId; remap=@($_.remap); timestamp=$_.timestamp
+            }
+        })
+    }
+    $doc | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+
+    # ---- reconcile.csv (canonical columns) ----
+    $allCanon | Select-Object family,sourceName,appliedName,identityKey,outcome,reason,targetId |
+        Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8
+
+    # ---- reconcile.html ----
+    $colorOf = @{ Matched='#2e7d32'; Created='#1565c0'; Failed='#c62828'; Skipped='#ef6c00'; Preview='#616161'; OutOfScope='#6a1b9a' }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Intune Reconciliation</title>')
+    [void]$sb.AppendLine('<style>body{font-family:Segoe UI,Arial,sans-serif;margin:24px;color:#222}h1{margin:0 0 4px}')
+    [void]$sb.AppendLine('table{border-collapse:collapse;width:100%;margin:8px 0 24px}th,td{border:1px solid #ddd;padding:6px 8px;font-size:13px;text-align:left;vertical-align:top}')
+    [void]$sb.AppendLine('th{background:#f5f5f5}.pill{color:#fff;border-radius:10px;padding:2px 8px;font-size:12px;white-space:nowrap}')
+    [void]$sb.AppendLine('.crit{background:#c62828;color:#fff;padding:12px 16px;border-radius:6px;margin:12px 0}.ok{background:#2e7d32;color:#fff;padding:12px 16px;border-radius:6px;margin:12px 0}')
+    [void]$sb.AppendLine('.meta{color:#555;font-size:13px}code{background:#f0f0f0;padding:1px 4px;border-radius:3px}</style></head><body>')
+    [void]$sb.AppendLine(("<h1>Intune Reconciliation Report</h1><div class='meta'>backend=graph-beta &middot; phase={0} &middot; target={1} &middot; generated {2}</div>" -f (ConvertTo-HtmlText $Phase),(ConvertTo-HtmlText $TargetTenantId),(ConvertTo-HtmlText ((Get-Date).ToString('o')))))
+    # Header section: SECURITY-CRITICAL NOT APPLIED
+    if ($criticalNotApplied.Count -gt 0) {
+        [void]$sb.AppendLine(("<div class='crit'><b>&#9888; SECURITY-CRITICAL NOT APPLIED ({0})</b><br>Critical security objects (Compliance / Conditional Access / baselines) that were NOT applied.</div>" -f $criticalNotApplied.Count))
+        [void]$sb.AppendLine('<table><tr><th>Family</th><th>Source</th><th>Applied</th><th>Outcome</th><th>Reason</th></tr>')
+        foreach ($r in $criticalNotApplied) {
+            [void]$sb.AppendLine(("<tr><td>{0}</td><td>{1}</td><td>{2}</td><td><span class='pill' style='background:{3}'>{4}</span></td><td>{5}</td></tr>" -f (ConvertTo-HtmlText $r.family),(ConvertTo-HtmlText $r.sourceName),(ConvertTo-HtmlText $r.appliedName),($colorOf[$r.outcome]),(ConvertTo-HtmlText $r.outcome),(ConvertTo-HtmlText $r.reason)))
+        }
+        [void]$sb.AppendLine('</table>')
+    } else {
+        [void]$sb.AppendLine("<div class='ok'>&#10003; SECURITY-CRITICAL NOT APPLIED: none. No critical security object left unapplied.</div>")
+    }
+    # Summary + invariant
+    [void]$sb.Append("<div class='meta'>Summary: ")
+    foreach ($o in @('Matched','Created','Failed','Skipped','Preview','OutOfScope')) {
+        [void]$sb.Append(("<span class='pill' style='background:{0}'>{1}: {2}</span> " -f ($colorOf[$o]),$o,$summary[$o]))
+    }
+    [void]$sb.AppendLine(("</div><div class='meta'>Completeness invariant: {0} outcome(s) == {1} source object(s) seen -&gt; {2}</div>" -f @($allCanon).Count,$seen,($(if($invariantOK){'OK'}else{'FAIL'}))))
+    # Per-family tables
+    foreach ($grp in ($allCanon | Group-Object family | Sort-Object Name)) {
+        [void]$sb.AppendLine(("<h3>{0} ({1})</h3>" -f (ConvertTo-HtmlText $grp.Name),$grp.Count))
+        [void]$sb.AppendLine('<table><tr><th>Outcome</th><th>Source name</th><th>Applied name</th><th>IdentityKey</th><th>Target id</th><th>Reason</th></tr>')
+        foreach ($r in $grp.Group) {
+            [void]$sb.AppendLine(("<tr><td><span class='pill' style='background:{0}'>{1}</span></td><td>{2}</td><td>{3}</td><td><code>{4}</code></td><td><code>{5}</code></td><td>{6}</td></tr>" -f ($colorOf[$r.outcome]),(ConvertTo-HtmlText $r.outcome),(ConvertTo-HtmlText $r.sourceName),(ConvertTo-HtmlText $r.appliedName),(ConvertTo-HtmlText $r.identityKey),(ConvertTo-HtmlText $r.targetId),(ConvertTo-HtmlText $r.reason)))
+        }
+        [void]$sb.AppendLine('</table>')
+    }
+    [void]$sb.AppendLine('</body></html>')
+    Set-Content -LiteralPath $htmlPath -Value $sb.ToString() -Encoding UTF8
+
+    # ---- console + exit code ----
+    Write-Host ""
+    Write-Host "=== Reconciliation ===" -ForegroundColor Magenta
+    foreach ($o in @('Matched','Created','Failed','Skipped','Preview','OutOfScope')) { Write-Host ("  {0,-11}: {1}" -f $o,$summary[$o]) }
+    Write-Host ("  Completeness : {0} outcomes == {1} seen -> {2}" -f @($allCanon).Count,$seen,($(if($invariantOK){'OK'}else{'FAIL'}))) -ForegroundColor ($(if($invariantOK){'Green'}else{'Red'}))
+    Write-Host ("  reconcile.json : {0}" -f $jsonPath) -ForegroundColor Cyan
+    Write-Host ("  reconcile.html : {0}" -f $htmlPath) -ForegroundColor Cyan
+    Write-Host ("  reconcile.csv  : {0}" -f $csvPath)  -ForegroundColor Cyan
+
+    if ($criticalNotApplied.Count -gt 0 -and $Execute) {
+        Write-Host ""
+        Write-Host "################################################################" -ForegroundColor Red
+        Write-Host "#  SECURITY-CRITICAL NOT APPLIED  --  MANUAL ACTION REQUIRED    #" -ForegroundColor Red
+        Write-Host "################################################################" -ForegroundColor Red
+        foreach ($r in $criticalNotApplied) { Write-Host ("  [!] {0} | {1} -> {2} ({3})" -f $r.family,$r.sourceName,$r.outcome,$r.reason) -ForegroundColor Red }
+        $script:ReconExitCode = 2
+    }
+}
+
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "=== Intune Import CORRECTED v3 ===  Phase=$Phase  Execute=$($Execute.IsPresent)" -ForegroundColor Magenta
@@ -417,27 +588,50 @@ foreach ($cat in $selected) {
     if (-not (Test-Path $folder)) { continue }
     $files = @(Get-ChildItem $folder -Filter *.json -File)
     if ($files.Count -eq 0) { continue }
+    $script:SourceFileCount += $files.Count   # P1-1: enumerated independently of Add-Result -> a dropped file makes the invariant FAIL
 
     Write-Host ""
     Write-Host ("--- {0} ({1} file(s)) ---" -f $cat.Folder,$files.Count) -ForegroundColor Cyan
 
-    # Idempotence: existing keys (name + type/platform discriminator) in the target
-    $existingKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+    # Idempotence: existing key (name + type/platform discriminator) -> TARGET id in the target tenant.
+    # P1-1: Dictionary key->targetId (was a HashSet) so a MATCHED source can PROVE the pre-existing target it maps to.
+    $existingKeys = New-Object 'System.Collections.Generic.Dictionary[string,string]'
     try {
         foreach ($e in @(Get-AllValues -Path $cat.Path)) {
             $k = Get-IdempotencyKey -Obj $e -Cat $cat
-            if ($k) { [void]$existingKeys.Add($k) }
+            if ($k) { $existingKeys[$k] = [string]$e.id }   # store the target object id (last wins on dup key)
         }
     } catch { Write-Host ("  [!] Cannot read existing items ({0}) : {1}" -f $cat.Path,$_.Exception.Message) -ForegroundColor Yellow }
 
+    # P1-1: source IdentityKeys already produced in THIS run (per family) -> hard-fail duplicate source files.
+    $seenIdentity = @{}
+
     foreach ($f in $files) {
+        $script:RemapLog = New-Object System.Collections.Generic.List[object]   # P1-1: remap trail for THIS object
         $obj  = Read-JsonFile $f.FullName
-        $name = if ($obj[$cat.Name]) { [string]$obj[$cat.Name] } elseif ($obj['displayName']) { [string]$obj['displayName'] } else { [string]$obj['name'] }
+        $script:SourceSeenCount++                                               # P1-1 completeness: one SOURCE object seen
+        # SourceName = the NON-prefixed source name; AppliedName ($name) = the name actually pushed (prefixed).
+        $sourceName = if ($obj[$cat.Name]) { [string]$obj[$cat.Name] } elseif ($obj['displayName']) { [string]$obj['displayName'] } else { [string]$obj['name'] }
+        $name = $sourceName
         if ($NamePrefix) { $name = $NamePrefix + $name }
+        # IdentityKey RECORDED = logical key on the NON-prefixed source name (backend-neutral, prefix-independent).
+        $identityKey = Get-IdempotencyKey -Obj $obj -Cat $cat
+        # $key = MATCH key against the target (prefixed inside a prefixed run) -- target matching is UNCHANGED.
         $key  = Get-IdempotencyKey -Obj $obj -Cat $cat -NameOverride $name
 
-        if ($existingKeys.Contains($key)) {
-            Add-Result $cat.Folder $name 'EXISTS' 'Same key (name+type) already present' $null $null
+        # P1-1 collision: two DIFFERENT source files with the same logical IdentityKey -> hard-fail the second
+        # (do NOT let it be silently absorbed as EXISTS). Checked BEFORE the EXISTS match on purpose.
+        if ($identityKey -and $seenIdentity.ContainsKey($identityKey)) {
+            $dupReason = "Duplicate IdentityKey '$identityKey' already produced by source '$($seenIdentity[$identityKey])' in this run"
+            Add-Result $cat.Folder $name 'SKIP_DUP_KEY' $dupReason $null $null -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey
+            Write-Host ("  [!] SKIP_DUP_KEY {0} -- {1}" -f $name,$dupReason) -ForegroundColor Red
+            continue
+        }
+        if ($identityKey) { $seenIdentity[$identityKey] = $f.Name }
+
+        if ($existingKeys.ContainsKey($key)) {
+            $tid = $existingKeys[$key]
+            Add-Result $cat.Folder $name 'EXISTS' 'Same key (name+type) already present' $tid $null -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey
             Write-Host ("  [=] {0}" -f $name) -ForegroundColor DarkGray
             continue
         }
@@ -445,7 +639,7 @@ foreach ($cat in $selected) {
         try { $payload = Build-Payload -O $obj -Cat $cat }
         catch {
             $reason = $_.Exception.Message
-            Add-Result $cat.Folder $name ($reason.Split(':')[0].Trim()) $reason $null $null
+            Add-Result $cat.Folder $name ($reason.Split(':')[0].Trim()) $reason $null $null -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey
             Write-Host ("  [~] {0} -- {1}" -f $name,$reason) -ForegroundColor Yellow
             continue
         }
@@ -454,7 +648,7 @@ foreach ($cat in $selected) {
 
         if (-not $Execute) {
             $extra = if ($cat.Special -eq 'SettingsCatalog') { "settings=$((@($payload['settings'])).Count)" } elseif ($cat.Special -eq 'ConditionalAccess') { 'DISABLED / manual-enable-required' } else { '' }
-            Add-Result $cat.Folder $name 'PREVIEW' $extra $null $null
+            Add-Result $cat.Folder $name 'PREVIEW' $extra $null $null -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey -Remap $script:RemapLog
             Write-Host ("  [.] PREVIEW {0} {1}" -f $name,$extra) -ForegroundColor Gray
             continue
         }
@@ -464,11 +658,11 @@ foreach ($cat in $selected) {
             $created = Invoke-MgGraphRequest -Method POST -Uri "$GraphBase/$($cat.Path)" -Body $json -ContentType 'application/json'
             if ($cat.Special -eq 'ConditionalAccess') {
                 # Distinct outcome: a CA created DISABLED with remapped refs is NEVER a completed clone (manual enable required).
-                Add-Result $cat.Folder $name 'CREATED-DISABLED' 'Created-DISABLED / references-remapped / manual-enable-required' $created.id $null
+                Add-Result $cat.Folder $name 'CREATED-DISABLED' 'Created-DISABLED / references-remapped / manual-enable-required' $created.id $null -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey -Remap $script:RemapLog
             } else {
-                Add-Result $cat.Folder $name 'CREATED' '' $created.id $null
+                Add-Result $cat.Folder $name 'CREATED' '' $created.id $null -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey -Remap $script:RemapLog
             }
-            [void]$existingKeys.Add($key)   # avoid a duplicate if 2 source files share the same key in one run
+            $existingKeys[$key] = [string]$created.id   # avoid a duplicate if 2 source files share the same key in one run
             Write-Host ("  [+] {0}" -f $name) -ForegroundColor Green
 
             # Notification templates: POST localized messages after creation
@@ -483,7 +677,7 @@ foreach ($cat in $selected) {
                 }
             }
         } catch {
-            Add-Result $cat.Folder $name 'ERROR' '' $null $_.Exception.Message
+            Add-Result $cat.Folder $name 'ERROR' '' $null $_.Exception.Message -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey
             Write-Host ("  [X] {0} -- {1}" -f $name, ($_.Exception.Message -replace '\s+',' ').Substring(0,[Math]::Min(140,($_.Exception.Message).Length))) -ForegroundColor Red
         }
     }
@@ -492,9 +686,13 @@ foreach ($cat in $selected) {
 # Log
 $dir = Split-Path -Parent $LogPath
 if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-$script:Results | Export-Csv -Path $LogPath -NoTypeInformation -Encoding UTF8
+$script:Results | Select-Object * -ExcludeProperty Remap | Export-Csv -Path $LogPath -NoTypeInformation -Encoding UTF8
 
 Write-Host ""
 Write-Host "=== Summary ($Phase) ===" -ForegroundColor Magenta
 $script:Results | Group-Object Status | Sort-Object Count -Descending | Format-Table Name,Count -AutoSize
 Write-Host ("CSV Log : {0}" -f $LogPath) -ForegroundColor Cyan
+
+# P1-1: reconciliation report (reconcile.json/html/csv) + SECURITY-CRITICAL gate. exit 2 only in -Execute.
+Write-Reconciliation
+if ($script:ReconExitCode -ne 0) { exit $script:ReconExitCode }
