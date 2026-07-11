@@ -1,6 +1,6 @@
 @{
     RootModule           = 'IntuneTenantCloneKit.psm1'
-    ModuleVersion        = '2.0.0'
+    ModuleVersion        = '2.1.0'
     GUID                 = '2dfaf5e5-83c3-4d11-97b5-edc8c1a1bd89'
     Author               = 'Houmak'
     CompanyName          = 'Minerva IA'
@@ -39,6 +39,18 @@
             LicenseUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit'
             ReleaseNotes = @'
+2.1.0  (reconciliation report)
+- Import-IntuneConfiguration now emits an object-by-object reconciliation report next to the CSV log:
+  reconcile.json (versioned, backend-neutral schema), reconcile.html (per-family tables + a
+  SECURITY-CRITICAL NOT APPLIED header) and reconcile.csv. It proves what landed, what did not, and why.
+- IdentityKey is recorded on the NON-prefixed source name (sourceName vs appliedName kept distinct);
+  a Matched object carries the real target id; two source files with the same IdentityKey hard-fail as
+  SKIP_DUP_KEY instead of a silent merge.
+- Security-criticality: a Compliance / Conditional Access / Endpoint Security / baseline object left
+  Failed, Skipped or OutOfScope (or a CA created DISABLED) raises a red banner and, under -Execute, a
+  non-zero exit code (2) - a silently dropped security baseline can no longer read as "all clear".
+- Completeness invariant counts source files independently of record emission.
+
 2.0.0  (security hardening - BREAKING)
 - SECURITY (P0): assignments are now FAIL-CLOSED. An unresolved exclusion group or assignment filter
   BLOCKS the whole object instead of applying a partial set that would broaden scope. The switch
