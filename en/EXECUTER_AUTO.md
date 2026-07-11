@@ -78,7 +78,7 @@ no groups, no assignments). Review it in the report, then rerun without `-Previe
 | `-SourcePath <folder>` | Reimport an already produced export instead of exporting anew. |
 | `-ImportReport <file>` | Clean up a previous failed import before reimporting (otherwise auto-detected in `input\`). |
 | `-SkipAssignments` | Do not migrate groups + assignments. |
-| `-SkipVerification` | Do not run the final SOURCE vs TARGET count. |
+| `-SkipVerification` | Do not run the final SOURCE vs TARGET reconciliation (per-wave `reconcile.json`). |
 | `-SkipApps` / `-SkipScripts` / `-SkipMobile` | Skip an import wave. |
 | `-IncludeScopeTags` | Keep the `roleScopeTagIds` (requires RBAC.ReadWrite on the target). |
 | `-StaticOnlyGroups` | Recreate dynamic groups as empty static ones (safer in a sandbox). |
@@ -93,6 +93,25 @@ pwsh -File "$Kit\Invoke-IntuneCloneKit-Unattended.ps1" `
   -SourceClientId <APPSRC> -SourceCertThumbprint <THUMBSRC> `
   -TargetClientId <APPTGT> -TargetCertThumbprint <THUMBTGT>
 ```
+
+---
+
+## Verification, resilience & exit code
+
+- **Honest verification (not a count).** Step 7 no longer compares object counts (a preexisting
+  target object could hide a missing import). It reads each wave's `reconcile.json` as the source of
+  truth and reports every object by **outcome** — Matched / Created / Failed / Skipped / Preview /
+  OutOfScope — naming any gap. A Conditional Access policy created **DISABLED**
+  (`manual-enable-required`) is counted as a gap, not as applied. Reads are **fully paginated**
+  (`@odata.nextLink`), so nothing is truncated past the first page.
+- **Security-critical gate → non-zero exit.** If a security-critical object (Compliance /
+  Conditional Access / Endpoint Security / baseline) is left Failed/Skipped/OutOfScope, the run
+  prints a red **SECURITY-CRITICAL NOT APPLIED** banner and, under real execution (not `-Preview`),
+  exits with a **non-zero code**. A scheduled task therefore reports a real **failure** instead of a
+  false success.
+- **Throttling is retried.** HTTP 429/503/504 are replayed automatically (honoring `Retry-After`,
+  else exponential backoff with jitter) across export, import, assignments and verification — a
+  transient throttle no longer surfaces as an error.
 
 ---
 
@@ -117,10 +136,16 @@ They are **skipped cleanly** (status `SKIP_*`) and listed in the report for manu
 
 ## AI assist (optional)
 
-Add `-UseAIAssist` to the unattended run to also draft a recreation **runbook + scaffolds** for the
-manual items (see [`LIMITATIONS.md`](LIMITATIONS.md)), right after verification. Requires AI settings
-in `config.ps1` (your own API key). Output goes to `output\ai\`. It **never writes to a tenant** and
-redacts secrets before sending metadata to the AI endpoint.
+Add `-UseAIAssist` to the unattended run to also draft a recreation **runbook + scaffolds**
+(PowerShell/Graph with `-WhatIf` and `<PLACEHOLDER>` secrets) for the manual items (see
+[`LIMITATIONS.md`](LIMITATIONS.md)), right after verification. Output goes to `output\ai\`. It
+**never writes to a tenant** and never auto-executes.
+
+By design the unattended step is a **local dry-run**: it redacts secrets and writes metadata to disk
+with **zero network calls**. Sending that metadata to an AI endpoint is a separate, explicit opt-in —
+you run `scripts\Invoke-IntuneAIAssist.ps1 -SendToProvider` yourself (requires AI settings in
+`config.ps1`, your own API key; a pre-send secret scan hard-fails if anything sensitive slipped
+through). Prefer Azure OpenAI so data stays in your tenant.
 
 ```powershell
 pwsh -File "$Kit\Invoke-IntuneCloneKit-Unattended.ps1" -UseAIAssist

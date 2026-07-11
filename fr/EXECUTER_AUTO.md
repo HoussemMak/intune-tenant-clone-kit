@@ -78,7 +78,7 @@ aucun groupe, aucune affectation). À vérifier dans le rapport, puis relancer s
 | `-SourcePath <dossier>` | Réimporter un export déjà produit au lieu d'exporter à neuf. |
 | `-ImportReport <fichier>` | Nettoyer un import précédent raté avant de réimporter (sinon auto-détecté dans `input\`). |
 | `-SkipAssignments` | Ne pas migrer groupes + affectations. |
-| `-SkipVerification` | Ne pas faire le comptage final SOURCE vs CIBLE. |
+| `-SkipVerification` | Ne pas faire la réconciliation finale SOURCE vs CIBLE (`reconcile.json` par vague). |
 | `-SkipApps` / `-SkipScripts` / `-SkipMobile` | Sauter une vague d'import. |
 | `-IncludeScopeTags` | Conserver les `roleScopeTagIds` (nécessite RBAC.ReadWrite sur la cible). |
 | `-StaticOnlyGroups` | Recréer les groupes dynamiques en statiques vides (plus sûr en bac à sable). |
@@ -93,6 +93,26 @@ pwsh -File "$Kit\Invoke-IntuneCloneKit-Unattended.ps1" `
   -SourceClientId <APPSRC> -SourceCertThumbprint <THUMBSRC> `
   -TargetClientId <APPTGT> -TargetCertThumbprint <THUMBTGT>
 ```
+
+---
+
+## Vérification, résilience & code de sortie
+
+- **Vérification honnête (pas un comptage).** L'étape 7 ne compare plus les nombres d'objets (un
+  objet préexistant dans la cible pourrait masquer un import manquant). Elle lit le `reconcile.json`
+  de chaque vague comme source de vérité et rend compte de chaque objet par **résultat** — Matched /
+  Created / Failed / Skipped / Preview / OutOfScope — en nommant chaque écart. Une stratégie d'accès
+  conditionnel créée **DÉSACTIVÉE** (`manual-enable-required`) est comptée comme un écart, pas comme
+  appliquée. Les lectures sont **entièrement paginées** (`@odata.nextLink`) : rien n'est tronqué
+  au-delà de la première page.
+- **Verrou sécurité-critique → code de sortie non nul.** Si un objet sécurité-critique (Conformité /
+  Accès conditionnel / Endpoint Security / baseline) reste Failed/Skipped/OutOfScope, l'exécution
+  affiche une bannière rouge **SECURITY-CRITICAL NOT APPLIED** et, en exécution réelle (hors
+  `-Preview`), sort avec un **code non nul**. Une tâche planifiée signale donc un vrai **échec**
+  plutôt qu'un faux succès.
+- **Le throttling est rejoué.** Les HTTP 429/503/504 sont automatiquement rejoués (respect de
+  `Retry-After`, sinon backoff exponentiel avec jitter) sur l'export, l'import, les affectations et
+  la vérification — un throttling transitoire ne remonte plus comme une erreur.
 
 ---
 
@@ -118,10 +138,16 @@ Ils sont **ignorés proprement** (statut `SKIP_*`) et listés dans le rapport po
 ## Assistant IA (optionnel)
 
 Ajoutez `-UseAIAssist` à l'exécution non-surveillée pour rédiger aussi un **runbook de recréation +
-scaffolds** pour les éléments manuels (voir [`LIMITATIONS.md`](LIMITATIONS.md)), juste après la
-vérification. Nécessite les réglages IA dans `config.ps1` (votre propre clé API). La sortie va dans
-`output\ai\`. **N'écrit jamais dans un tenant** et expurge les secrets avant d'envoyer les métadonnées
-à l'endpoint IA.
+scaffolds** (PowerShell/Graph avec `-WhatIf` et secrets `<PLACEHOLDER>`) pour les éléments manuels
+(voir [`LIMITATIONS.md`](LIMITATIONS.md)), juste après la vérification. La sortie va dans `output\ai\`.
+**N'écrit jamais dans un tenant** et n'exécute jamais rien automatiquement.
+
+Par conception, l'étape non-surveillée est un **essai à blanc local** : elle expurge les secrets et
+écrit les métadonnées sur le disque avec **zéro appel réseau**. Envoyer ces métadonnées à un endpoint
+IA est un choix explicite et distinct — vous lancez vous-même
+`scripts\Invoke-IntuneAIAssist.ps1 -SendToProvider` (nécessite les réglages IA dans `config.ps1`,
+votre propre clé API ; un scan de secrets pré-envoi échoue en dur si quelque chose de sensible a
+échappé au filtre). Préférez Azure OpenAI pour que les données restent dans votre tenant.
 
 ```powershell
 pwsh -File "$Kit\Invoke-IntuneCloneKit-Unattended.ps1" -UseAIAssist

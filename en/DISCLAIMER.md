@@ -6,6 +6,8 @@ This kit is provided **"as is", without warranty of any kind**, express or impli
 contributors cannot be held liable for any damage, configuration loss, or service interruption
 resulting from its use.
 
+**Scope:** this kit duplicates the *clonable Intune configuration* tenant-to-tenant. It is **not** a device, identity, or tenant migration — devices re-enroll and secrets & tokens are re-created / re-paired manually.
+
 - It **writes** to a Microsoft Intune tenant. A wrong target can modify a production environment.
 - **Always** start on a **sandbox / test** tenant, in preview mode (PREVIEW), and **back up** the
   target before any write (see `EXECUTER.md`, backup step).

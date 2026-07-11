@@ -5,7 +5,14 @@
 Reliably clone a Microsoft Intune configuration from one tenant to another
 (fresh **export → correct → import**). PowerShell 7 + Microsoft Graph.
 
-![intune-tenant-clone-kit architecture](en/EN.png)
+> **We clone the configuration; we guide the rest.** This kit duplicates the
+> *clonable* Intune **configuration** tenant-to-tenant — it is **not** a device
+> or identity migration (devices re-enroll, secrets & tokens re-pair).
+> *On clone la configuration, on guide le reste. Le kit duplique la
+> **configuration** Intune clonable — ce n'est **pas** une migration d'appareils
+> ni d'identités (les appareils se ré-enrôlent, les secrets et jetons se re-jumellent).*
+
+![intune-tenant-clone-kit architecture](assets/architecture.png)
 
 ## Choose your language · Choisissez votre langue
 
@@ -16,6 +23,8 @@ Reliably clone a Microsoft Intune configuration from one tenant to another
 
 Each folder is a **complete, self-contained bundle** in its language (scripts, docs, sample export).
 *Chaque dossier est un **bundle complet et autonome** dans sa langue (scripts, docs, exemple).*
+
+![What the kit clones vs. what re-pairs — at a glance](assets/overview.png)
 
 > ⚠️ Read the DISCLAIMER before any use. Test on a sandbox tenant first.
 > *Lire le DISCLAIMER avant tout usage. Toujours tester sur un tenant de bac à sable.*

@@ -29,6 +29,7 @@ function Connect-Target { Disconnect-MgGraph -EA SilentlyContinue|Out-Null; $p=@
 function Assert-Source  { if((Get-MgContext).TenantId -ne $SourceTenantId){throw 'STOP: pas connecté au tenant SOURCE'}; 'OK SOURCE' }
 function Assert-Target  { if((Get-MgContext).TenantId -ne $TargetTenantId){throw 'STOP: pas connecté au tenant CIBLE'};  'OK CIBLE' }
 ```
+> **Portées moindre-privilège.** Le jeu d'écriture (`$Scopes`) retire volontairement `DeviceManagementManagedDevices.*` — les appareils se ré-enrôlent côté cible, ils ne sont pas clonés. Le Conditional Access est **opt-in** : n'ajoutez `Policy.ReadWrite.ConditionalAccess` que si vous clonez le CA (les politiques CA clonées sont toujours **créées DÉSACTIVÉES** — à relire, puis activer à la main). Si vous provisionnez une inscription d'application dédiée au lieu d'une connexion interactive, encadrez cette même portée avec `New-IntuneCloneKitAppRegistration.ps1 -EnableConditionalAccess` (désactivé par défaut).
 
 ### Étape 2 — Module + déblocage des scripts
 ```powershell
@@ -80,6 +81,7 @@ Connect-Target; Assert-Target
 & $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Scripts    -Execute -LogPath "$Logs\08_scripts.csv"
 & $Engine -SourcePath $Fixed -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase Mobile     -Execute -LogPath "$Logs\09_mobile.csv"
 ```
+> **Rapport de réconciliation — à relire.** Chaque vague écrit désormais `reconcile.json` / `reconcile.html` / `reconcile.csv` à côté de son journal CSV (dans `$Logs`). Il liste chaque objet avec son issue (`Matched` / `Created` / `Failed` / `Skipped` / `Preview` / `OutOfScope`), la raison, le `targetId` et tout remap. **Ouvrez `reconcile.html`** après chaque vague. Si un objet critique de sécurité (Conformité / Conditional Access / Endpoint Security / baseline) reste `Failed` / `Skipped` / `OutOfScope` — ou qu'une politique CA a été créée désactivée — une bannière rouge **SECURITY-CRITICAL NOT APPLIED** s'affiche et le run se termine avec un **code non nul** sous `-Execute` : traitez ces éléments avant la mise en production.
 
 ### Étape 9 — Bilan des imports
 ```powershell
@@ -94,6 +96,8 @@ Get-ChildItem "$Logs\0*.csv"|%{"`n$($_.Name)";Import-Csv $_|Group-Object Status|
 & "$Pkg\Invoke-IntuneAssignments_Graph.ps1" -SourceTenantId $SourceTenantId -TargetTenantId $TargetTenantId -Phase All -Execute
 ```
 > En mode manuel, ce script se connecte de façon interactive (SOURCE pour l'export, CIBLE pour l'écriture). Pour l'enchaînement 100 % non-surveillé, voir [`EXECUTER_AUTO.md`](EXECUTER_AUTO.md).
+>
+> **Les affectations sont fail-closed.** Un objet dont la cible ne peut pas être entièrement résolue est **BLOQUÉ**, jamais élargi silencieusement. Une **exclusion ou un filtre** non résolu bloque toujours (un `/assign` partiel élargirait la portée — créez le filtre/groupe d'exclusion manquant côté cible, puis relancez). Si les *seules* cibles non résolues sont des groupes d'**inclusion** (le sous-ensemble résolu est de portée identique-ou-plus-étroite), ajoutez `-AllowPartialInclusionsOnly` pour appliquer ce sous-ensemble réduit au lieu de bloquer.
 
 ### Étape 11 — Vérification finale (comptes SOURCE vs CIBLE)
 ```powershell

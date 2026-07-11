@@ -3,8 +3,10 @@
 # Méthodologie — cloner Intune d'un tenant à un autre
 
 Cloner une configuration Intune n'est **pas** une copie de fichiers : c'est une **reconstruction
-sémantique**. Trois classes de problèmes font échouer les approches naïves. Ce document explique
-chacune et le correctif appliqué par le kit.
+sémantique**. Les §1 à §3 couvrent les trois classes de problèmes qui font échouer les copies
+naïves ; les §4 à §8 couvrent comment le kit **prouve** ce qu'il a appliqué, refuse d'**élargir la
+portée** et survit au **throttling**. Chaque section garde la même forme **symptôme → cause →
+correctif**.
 
 ## 1. Corruption de sérialisation des payloads polymorphes (Settings Catalog)
 
@@ -69,6 +71,98 @@ dans un autre tenant.
   recréation manuelle.
 - **Affectations** : les importer **en dernier**, après validation des objets et des mappings.
 
+## 4. Faux succès partiel — aucune preuve de ce qui a été appliqué
+
+**Symptôme** : un import « se termine » en vert, mais personne ne peut dire si une politique de
+conformité a réellement été **créée**, a **matché** une existante, ou a été silencieusement
+**ignorée**. Un relecteur qui demande « l'Accès conditionnel est-il actif sur la cible ? » n'a aucun
+artefact qui fasse foi.
+
+**Cause** : un run qui n'affiche que des lignes `created` / `exists` ne laisse aucun registre par
+objet, exploitable par machine. Objets homonymes, runs préfixés et items ignorés se confondent dans
+le défilement — un objet critique non appliqué ressemble en tout point à un succès.
+
+**Correctif** : chaque import émet **`reconcile.json` + `reconcile.html` + `reconcile.csv`** à côté
+du log CSV — un enregistrement par objet : **outcome** (`Matched` / `Created` / `Failed` / `Skipped`
+/ `Preview` / `OutOfScope`), **reason**, **targetId**, **identityKey** et le **remap** appliqué.
+- L'**`identityKey`** est la clé logique sur le nom source **non préfixé** (indépendant du backend et
+  du préfixe), donc un objet reste traçable même dans un run préfixé.
+- **`Matched`** et **`Created`** portent l'**id cible** — la preuve que l'objet existe sur la cible.
+- Deux fichiers source revendiquant le **même `identityKey`** dans un run **échouent durement en
+  `SKIP_DUP_KEY`** (pas d'écrasement silencieux d'un objet logique par un autre).
+- Une famille critique (**Conformité / Accès conditionnel / Endpoint Security / baseline**) restée
+  **`Failed` / `Skipped` / `OutOfScope`** — ou une politique CA **créée DÉSACTIVÉE** — déclenche la
+  bannière rouge **« SECURITY-CRITICAL NOT APPLIED »** et un **code de sortie non nul** sous
+  `-Execute`, pour que l'automatisation s'arrête sur un faux vert au lieu d'annoncer un succès.
+
+## 5. Affectations qui élargissent silencieusement la portée (fail-closed)
+
+**Symptôme** : un objet est appliqué sur la cible, mais un **groupe d'exclusion** ou un **filtre
+d'affectation** dont il dépendait n'a pas pu être résolu (il n'existe pas sur la cible). L'objet
+finit par cibler **plus** d'appareils/utilisateurs que sur la source.
+
+**Cause** : un `/assign` naïf retire la cible non résolue et POSTe le reste. Retirer une **inclusion**
+ne fait que réduire la portée, mais retirer une **exclusion** ou un **filtre** l'**élargit** — une
+régression de portée qui passe inaperçue.
+
+**Correctif** : la phase d'affectation est **fail-closed** ; les cibles non résolues sont suivies
+séparément (inclusion / exclusion / filtre) :
+- Une **exclusion ou un filtre** non résolu **BLOQUE** l'objet entier sans condition — une cible
+  n'est jamais appliquée sans son filtre/exclusion.
+- Une **inclusion** non résolue bloque aussi par défaut ; seul `-AllowPartialInclusionsOnly` (renommé
+  depuis `-AllowPartialAssignments`) laisse passer le sous-ensemble résolu, **égal ou plus étroit**.
+- Les objets bloqués sont signalés, pour que vous créiez le filtre/groupe d'exclusion manquant sur la
+  cible et rejouiez.
+
+## 6. Références d'Accès conditionnel non résolues (remap-or-refuse)
+
+**Symptôme** : une politique d'Accès conditionnel est clonée, mais ses utilisateurs / groupes / rôles
+/ apps `include`/`exclude` pointent encore vers des **GUID du tenant source** qui ne veulent rien dire
+sur la cible — voire résolvent vers le *mauvais* principal.
+
+**Cause** : les politiques CA sont des réseaux denses de références locales au tenant. Émettre un seul
+id source non mappé produit une politique silencieusement mal scopée, et une politique CA active mais
+fausse est plus dangereuse que pas de politique du tout.
+
+**Correctif** : **remap-or-refuse**. Chaque référence liée au tenant est soit remappée via les maps
+cibles, soit toute la politique est **refusée** (`SKIP_UNRESOLVED_CA_REF`) — un id du tenant source
+n'est **jamais** émis (sauf les app ids Microsoft bien connus). Toute politique CA effectivement créée
+l'est **DÉSACTIVÉE**, pour qu'un humain la relise et l'active (le rapport la marque
+security-critical-not-applied jusque-là).
+
+## 7. Throttling et erreurs serveur transitoires (429 / 503 / 504)
+
+**Symptôme** : un export ou un import volumineux échoue en cours de route sur `429 Too Many Requests`,
+`503 Service Unavailable` ou `504 Gateway Timeout`, et un run naïf remonte cela comme un **Failed**
+dur sur un objet qui n'était pas réellement cassé.
+
+**Cause** : Graph throttle les tenants à fort volume. Un simple 429 transitoire ne doit pas se lire
+comme un échec au niveau objet (ni comme un faux `Skipped`) dans le rapport de réconciliation.
+
+**Correctif** : chaque appel passe par un wrapper de retry (export / import / affectations /
+orchestrateur). Sur **429/503/504**, il honore l'en-tête **`Retry-After`** quand il est présent, sinon
+un **backoff exponentiel plafonné (≤ 60 s) + jitter**, puis rejoue l'appel. Toute erreur non liée au
+throttling est relancée telle quelle, donc la logique fail-closed (§5–§6) reste intacte.
+
+## 8. Objets non clonables par API — recréation manuelle assistée
+
+**Symptôme** : certains items ne peuvent jamais être POSTés avec le bon contenu — secrets
+(Wi-Fi/VPN/PFX/OMA chiffré), admin templates, intents endpoint security, config d'inscription — et
+atterrissent en `MANUAL` / `SKIP_*` / `OutOfScope` dans le rapport. Les recréer à la main est lent et
+sujet aux erreurs.
+
+**Cause** : ils portent des valeurs que l'API ne rend jamais en clair, ou n'ont pas d'endpoint de
+ré-import (voir §3 et la table de couverture du README). Aucun outil ne franchit ce plafond
+cryptographique/API.
+
+**Correctif** : **assistance IA opt-in et durcie**. `Invoke-IntuneAIAssist` rédige — pour les items
+`MANUAL` / `SKIP_*` / secret — un **runbook + des ébauches PowerShell/Graph** (`-WhatIf`, secrets
+`<PLACEHOLDER>`) dans `ai-output/` **pour relecture humaine**. Il **n'écrit jamais dans un tenant et
+n'exécute jamais automatiquement**. L'envoi externe est **opt-in** via `-SendToProvider` (sans lui :
+dry-run local, **zéro appel réseau**) ; les secrets sont caviardés et un **scan de secrets avant
+envoi échoue durement** ; la clé d'API n'est jamais embarquée. L'humain reste dans la boucle —
+l'assistant ne fait qu'ôter le coût de la page blanche.
+
 ## Ordre d'exécution recommandé
 
 ```
@@ -84,4 +178,6 @@ dans un autre tenant.
 9. Manuel : secrets, apps binaires, admin templates, endpoint security, enrollment
 ```
 
-Chaque écriture se fait d'abord en **aperçu (PREVIEW)**, puis en exécution après contrôle.
+Chaque écriture se fait d'abord en **aperçu (PREVIEW)**, puis en exécution après contrôle — et chaque
+run émet le rapport de réconciliation (§4) comme artefact qui fait foi, la phase d'affectation étant
+fail-closed (§5).

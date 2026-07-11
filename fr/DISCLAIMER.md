@@ -6,6 +6,8 @@ Ce kit est fourni **« en l'état », sans aucune garantie**, expresse ou implic
 contributeurs ne sauraient être tenus responsables de tout dommage, perte de configuration, ou
 interruption de service résultant de son utilisation.
 
+**Portée :** ce kit duplique la *configuration Intune clonable* d'un tenant à l'autre. Ce n'est **pas** une migration d'appareils, d'identités ou de tenant — les appareils se réinscrivent et les secrets et jetons sont recréés / réappariés manuellement.
+
 - Il **écrit** dans un tenant Microsoft Intune. Une mauvaise cible peut modifier une production.
 - **Toujours** commencer sur un tenant de **bac à sable / test**, en mode aperçu (PREVIEW), et faire
   une **sauvegarde** de la cible avant toute écriture (voir `EXECUTER.md`, étape de sauvegarde).

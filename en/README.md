@@ -6,7 +6,13 @@
 
 **Reliably clone a Microsoft Intune configuration from one tenant to another (SOURCE → TARGET).**
 
-![intune-tenant-clone-kit architecture](EN.png)
+![intune-tenant-clone-kit architecture](../assets/architecture.png)
+
+> **We clone the configuration; we guide the rest.** This kit **duplicates the clonable Intune
+> _configuration_** from one tenant to another. It is **not** a device, identity or whole-tenant
+> *migration*: managed devices re-enroll and secrets/tokens re-pair against the target — a cryptographic
+> ceiling no tool can cross. Everything that cannot be cloned is **surfaced in the reconciliation report,
+> never silently dropped**, and the AI assistant drafts a review-first runbook to recreate it by hand.
 
 This kit fixes the classic pitfalls of cross-tenant Intune duplication: serialization corruption of
 polymorphic payloads (Settings Catalog), atomic policy creation, missing compliance actions, script
@@ -17,15 +23,30 @@ content not returned by the export, and identifiers that are not portable betwee
 
 ---
 
+## At a glance
+
+![intune-tenant-clone-kit — at a glance](../assets/overview.png)
+
+Three things set this kit apart from a raw export/import script:
+
+- **📊 Reconciliation report** *(the differentiator)* — every run emits an object-by-object
+  `reconcile.json` / `.html` / `.csv` and **fails loudly** when a security-critical object isn't applied.
+- **🔒 Fail-closed by design** — unresolved exclusions/filters **block** an object instead of widening
+  scope; Conditional Access is **remap-or-refuse** and always created disabled.
+- **🤖 AI runbook assistant** *(opt-in)* — drafts a review-first recreation runbook for whatever no tool
+  can clone; local dry-run by default, **never writes to a tenant**.
+
 ## What the kit does
 
 Full **export → correct → import** cycle.
 
 **Two execution modes:**
 - **Manual, step by step** — [`EXECUTER.md`](EXECUTER.md): interactive sign-in, every write in PREVIEW first.
-- **Zero-touch, unattended** — [`EXECUTER_AUTO.md`](EXECUTER_AUTO.md): a single command
-  (`Invoke-IntuneCloneKit-Unattended.ps1`), **app-only certificate** authentication, no prompt,
-  export → cleanup → import → assignments → verification → HTML report. Ideal as a scheduled task.
+- **Unattended (hands-off import)** — [`EXECUTER_AUTO.md`](EXECUTER_AUTO.md): a single command
+  (`Invoke-IntuneCloneKit-Unattended.ps1`), **app-only certificate** authentication, no prompt —
+  export → cleanup → import → assignments → **reconciliation-based verification** → HTML report. Ideal
+  as a scheduled task. *(Automates the configuration import without prompts; devices still re-enroll and
+  secrets still re-pair by hand.)*
 
 - **Fresh export** of the source tenant (PowerShell 7 + Microsoft Graph SDK, `beta` endpoint), **already
   rehydrated**: Settings Catalog settings, base64 content of scripts/remediations, compliance actions
@@ -35,6 +56,31 @@ Full **export → correct → import** cycle.
   CSV log, **PREVIEW by default**.
 - Optional **cleanup** of a previous failed import, **group/assignment remap by name**, anti-overwrite
   guardrail (refuses to write if the current context is not the target tenant).
+
+## How it works
+
+![How intune-tenant-clone-kit works — two lanes plus AI track](../assets/architecture-detailed.png)
+
+Two lanes run against **two separate tenants**: a **read-only export** from the SOURCE, then a
+**corrected, PREVIEW-first import** into the TARGET — behind an anti-source-write guard that hard-fails if
+the write context is not the target. A parallel **AI track** turns whatever cannot be cloned into a
+review-first runbook. Every import wave emits its own reconciliation report (below).
+
+## Reconciliation report (the differentiator)
+
+Every import run emits, **next to the CSV log**, a machine- and human-readable reconciliation:
+`reconcile.json`, `reconcile.html` and `reconcile.csv`. For **each object** it records the **outcome**
+(`Matched` / `Created` / `Failed` / `Skipped` / `Preview` / `OutOfScope`), the **reason**, the
+**targetId**, the **identityKey** (built on the non-prefixed source name) and any **remap** applied.
+
+- A duplicate source `identityKey` **hard-fails** that object as `SKIP_DUP_KEY` — no silent overwrite.
+- A **security-critical** family (Compliance, Conditional Access, Endpoint Security, anything named
+  *baseline*) left `Failed` / `Skipped` / `OutOfScope`, or a **Conditional Access** policy created
+  **disabled**, raises the red **"SECURITY-CRITICAL NOT APPLIED"** banner and returns a **non-zero exit
+  code** under `-Execute` — so a scheduled run can't "succeed" while leaving a security gap.
+
+The unattended orchestrator uses this per-wave `reconcile.json` as its **source of truth** for
+verification (it no longer just compares object counts), and paginates backup/verify to avoid truncation.
 
 ## Coverage
 
@@ -50,6 +96,24 @@ Full **export → correct → import** cycle.
 > silently dropped); an OutOfScope Endpoint Security object — or any object whose name contains *baseline* —
 > additionally raises the **security-critical** banner (non-zero reconciliation exit code under `-Execute`).
 
+## Security posture
+
+- **Fail-closed, never fail-open.** An unresolved assignment **exclusion** or **filter** blocks the
+  object instead of silently widening scope (switch: `-AllowPartialInclusionsOnly`). Conditional Access
+  is **remap-or-refuse**: every tenant-scoped reference is remapped or the policy is refused
+  (`SKIP_UNRESOLVED_CA_REF`), and CA policies are **always created disabled**.
+- **App-only least privilege.** `New-IntuneCloneAppRegistration` provisions an app registration
+  **without** `DeviceManagementManagedDevices.*`, mints a **non-exportable** certificate, and gates
+  Conditional Access scope behind an explicit **`-EnableConditionalAccess`** opt-in.
+- **Anti-source-write guard.** Writes are checked against `-SourceTenantId` vs `-TargetTenantId`
+  (independent of the manifest) and **hard-fail** on a missing or corrupt manifest — the kit refuses to
+  write to the source tenant.
+- **Secrets are never exfiltrated.** The AI assistant runs a **local dry-run by default** (zero network
+  calls); external send is a deliberate **`-SendToProvider`** opt-in, secrets are redacted and a pre-send
+  secret scan **hard-fails** if anything sensitive would leave the machine. Your API key is never bundled.
+- **Resilient by default.** HTTP `429 / 503 / 504` responses are retried with `Retry-After` + exponential
+  backoff across export, import, assignments and the orchestrator.
+
 ## Prerequisites
 
 - **PowerShell 7.4+** (required — not Windows PowerShell 5.1).
@@ -64,12 +128,14 @@ Full **export → correct → import** cycle.
 Copy-Item config.example.ps1 config.ps1
 #    -> edit config.ps1: fill in SourceTenantId / TargetTenantId / domains
 
-# 2) Follow EXECUTER.md (manual) or EXECUTER_AUTO.md (zero-touch)
+# 2) Follow EXECUTER.md (manual) or EXECUTER_AUTO.md (unattended)
 ```
 
 Details, root causes and troubleshooting: [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) · [`docs/SEQUENCE.md`](docs/SEQUENCE.md) (execution sequence).
 
 ## Install as a module (PowerShell Gallery)
+
+Published on the PowerShell Gallery — current stable **v2.1.0** (P0 security hardening + reconciliation report):
 
 ```powershell
 Install-Module IntuneTenantCloneKit -Scope CurrentUser
@@ -79,15 +145,23 @@ Get-Command -Module IntuneTenantCloneKit
 
 The module wraps the **same logic** as the `scripts/` files, exposed as approved-verb cmdlets
 (`Export-IntuneConfiguration`, `Import-IntuneConfiguration`, `Compare-IntuneExport`, `Test-IntuneExport`, …).
-Prefer the step-by-step scripts if you want to read and trace every action. See [`../module/README.md`](../module/README.md).
+Module **exit codes are preserved** — a cmdlet returns a usable code instead of terminating the host, so
+`Test-IntuneExport` / `Compare-IntuneExport` stay scriptable. Prefer the step-by-step scripts if you want
+to read and trace every action. See [`../module/README.md`](../module/README.md).
 
-## AI assist (optional, experimental)
+## AI assist (optional, hardened, opt-in)
 
-For the items the kit cannot auto-import (see [`LIMITATIONS.md`](LIMITATIONS.md)),
-[`scripts/Invoke-IntuneAIAssist.ps1`](scripts/Invoke-IntuneAIAssist.ps1) can ask a **configurable AI
-endpoint** (Azure OpenAI / OpenAI / custom) to draft a recreation **runbook + PowerShell scaffolds**
-for human review. It **never writes to a tenant**, redacts secrets before sending, and is **opt-in** —
-the API key is yours (set in `config.ps1`, git-ignored) and is never shipped with the kit.
+For the items the kit cannot auto-import (`MANUAL` / `SKIP_*` / secret-bearing objects — see
+[`LIMITATIONS.md`](LIMITATIONS.md)), [`scripts/Invoke-IntuneAIAssist.ps1`](scripts/Invoke-IntuneAIAssist.ps1)
+(cmdlet `Invoke-IntuneAIAssist`) drafts a recreation **runbook + `-WhatIf` PowerShell/Graph scaffolds**
+(with `<PLACEHOLDER>` secrets) into `ai-output/` **for human review**. It **never writes to a tenant** and
+**never auto-executes**.
+
+- **Local dry-run by default** — with no `-SendToProvider`, it makes **zero network calls**.
+- **External send is opt-in** — `-SendToProvider` is required to reach a **configurable AI endpoint**
+  (Azure OpenAI preferred / OpenAI / custom); secrets are redacted and a **pre-send secret scan
+  hard-fails** before anything leaves the machine.
+- The **API key is yours** (set in `config.ps1`, git-ignored) and is **never shipped** with the kit.
 
 ## Advanced helpers (optional)
 
@@ -108,11 +182,11 @@ the API key is yours (set in `config.ps1`, git-ignored) and is never shipped wit
 en/
 ├── README.md
 ├── EXECUTER.md                         # manual mode: step -> command
-├── EXECUTER_AUTO.md                    # zero-touch mode: a single command
+├── EXECUTER_AUTO.md                    # unattended mode: a single command
 ├── DISCLAIMER.md
 ├── Invoke-IntuneCloneKit-Unattended.ps1 # unattended orchestrator (app-only certificate)
 ├── config.example.ps1                  # copy to config.ps1 (gitignored)
-├── EN.png                              # architecture diagram
+├── EN.png                              # legacy diagram (the README hero now uses ../assets/architecture.png)
 ├── scripts/                            # corrected import engine, exporter, cleanup, remap, assignments
 ├── docs/                               # methodology + troubleshooting
 ├── sample/                             # SYNTHETIC mini-export (expected structure)

@@ -7,6 +7,30 @@ recreated automatically — either because of Microsoft Graph / Intune platform 
 they carry data that is not portable between tenants. Handle the items below **manually** in the
 target tenant.
 
+> ### Clone, not migration
+>
+> This kit **duplicates the _clonable_ Intune configuration** from one tenant to another. It is **not** a
+> device, identity, or full-tenant *migration*: on the target, devices **re-enroll** and secrets & tokens
+> **re-pair**. That boundary is a **cryptographic ceiling no tool crosses** — not a shortcoming of this one.
+> Three honest buckets:
+>
+> 1. **Cloned automatically** — ~20 configuration families are exported *and* re-imported (coverage table in
+>    [`README.md`](README.md)).
+> 2. **Exported, but recreated by hand** — Admin Templates (ADMX), Endpoint Security intents and Enrollment
+>    are captured by the export but **not** by the import engine; the reconciliation report surfaces each as
+>    **`OutOfScope`**, so nothing is silently dropped.
+> 3. **Never crossed — the cryptographic ceiling** — encrypted secrets (the export never carries the clear
+>    value), third-party tokens & connectors (APNs / Apple ADE·VPP / Managed Google Play / NDES), device
+>    identities & Autopilot hardware hashes, and app binaries & store/VPP licences.
+>
+> **We clone the configuration; we guide the rest.** For buckets 2 and 3, the opt-in AI assistant
+> ([`Invoke-IntuneAIAssist.ps1`](scripts/Invoke-IntuneAIAssist.ps1)) drafts a recreation **runbook +
+> PowerShell/Graph scaffolds** into `ai-output/` for human review — it **bridges the manual toil, not the
+> cryptographic ceiling**: it never writes to a tenant, never auto-executes, and redacts secrets before any
+> (opt-in) network call.
+
+![What clones vs. what re-pairs](../assets/overview.png)
+
 ## Not exported / cloned by the kit
 
 | Object type | Why | What to do |
@@ -31,6 +55,10 @@ critical policy is never mistaken for "all clear".
 | **Endpoint Security intents / baselines** | `15_EndpointSecurity` | The `intents` template model is not covered by the import engine; absent from the import catalog. | Recreate at the portal. Listed `OutOfScope`; baselines also flagged security-critical. |
 | **Enrollment configurations** | `16_Enrollment` | Tenant-specific enrollment restrictions / status pages; absent from the import catalog. | Recreate at the portal. |
 
+> 🤖 These three families are exactly the **manual gap** the opt-in AI assistant targets: point
+> `Invoke-IntuneAIAssist.ps1` at the export for a review-first recreation runbook + Graph scaffolds in
+> `ai-output/`. It bridges the toil (drafts the steps and scripts) — it never writes to your tenant.
+
 ## Other configuration types not cloned
 
 The kit enumerates a fixed set of Intune endpoints; anything outside that set is not exported:
@@ -39,15 +67,17 @@ The kit enumerates a fixed set of Intune endpoints; anything outside that set is
 - **RBAC role assignments** and **built-in role definitions** (custom role *definitions* are cloned;
   built-in roles and role *assignments* — who holds a role — are not).
 - **Company branding / Organizational messages** (tenant customization).
-- **Enrollment tokens** (Apple ADE/VPP, Android Enterprise) and **PKI / certificate connectors** —
-  secrets or infrastructure, not portable between tenants.
+- **Enrollment tokens & third-party connectors** — Apple **ADE/VPP** & the **APNs** push certificate,
+  **Managed Google Play** / Android Enterprise, and **PKI / NDES / certificate connectors**: secrets or
+  infrastructure that **re-pair** against the target tenant (the cryptographic ceiling), not portable.
 
 Recreate these at the portal, or handle them with a dedicated tool.
 
 ## Out of scope by design
 
 - **Conditional Access** — exported/imported **best-effort**: each policy is **created DISABLED**. References (users, groups, roles, apps, named locations, service principals, terms-of-use, authentication strength) are **remapped to the target tenant**; any reference that cannot be resolved makes the whole policy **refused (fail-closed)** rather than emitting a source-tenant ID. **Review and enable manually.** The CA scope is **opt-in**: the app-registration tool grants `Policy.ReadWrite.ConditionalAccess` only with **`-EnableConditionalAccess`**.
-- **Devices, users, Autopilot hardware hashes, reports / inventory data** — runtime data, not configuration.
+- **Devices, users, Autopilot hardware hashes, reports / inventory data** — runtime data, not configuration
+  (devices **re-enroll** on the target; Autopilot hashes are re-collected from the hardware itself).
 
 ## Handled, but tenant-dependent
 
