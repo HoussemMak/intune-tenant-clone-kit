@@ -39,6 +39,10 @@
 .PARAMETER AssumeYes
     Saute la confirmation de confidentialité (pour l'automatisation).
 
+.PARAMETER SendToProvider
+    Opt-in explicite pour contacter réellement l'endpoint IA sur le réseau. SANS ce switch, l'outil
+    tourne en DRY-RUN : il expurge et écrit les métadonnées localement et ne fait AUCUN appel réseau.
+
 .NOTES
     Les réglages IA sont lus depuis config.ps1 (gitignoré) ou des variables d'environnement. La clé API
     n'est JAMAIS livrée avec le kit :
@@ -55,7 +59,8 @@ param(
     [ValidateSet('en','fr')][string]$Language = 'en',
     [int]$MaxItems = 25,
     [string[]]$ExcludeFamilies,
-    [switch]$AssumeYes
+    [switch]$AssumeYes,
+    [switch]$SendToProvider
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,21 +74,31 @@ $AiEndpoint = if ($AiEndpoint) { $AiEndpoint } else { $env:INTUNE_AI_ENDPOINT }
 $AiApiKey   = if ($AiApiKey)   { $AiApiKey }   else { $env:INTUNE_AI_API_KEY }
 $AiModel    = if ($AiModel)    { $AiModel }    else { $env:INTUNE_AI_MODEL }
 
-if (-not $AiApiKey) {
-    throw "Aucune clé API IA. Renseignez `$AiApiKey (et `$AiEndpoint / `$AiModel / `$AiProvider) dans config.ps1, ou les variables d'environnement INTUNE_AI_*. La clé est fournie par VOUS et n'est jamais livrée avec le kit."
+if ($SendToProvider -and -not $AiApiKey) {
+    throw "Aucune clé API IA. Renseignez `$AiApiKey (et `$AiEndpoint / `$AiModel / `$AiProvider) dans config.ps1, ou les variables d'environnement INTUNE_AI_*. La clé est fournie par VOUS et n'est jamais livrée avec le kit. (Une clé n'est requise qu'avec -SendToProvider ; le dry-run n'en a pas besoin.)"
 }
 
 # --- Garde-fou de confidentialité (opt-in) ---
 Write-Host ""
 Write-Host "ASSISTANT IA DE RECRÉATION (expérimental)" -ForegroundColor Magenta
-Write-Host "Les MÉTADONNÉES des objets (secrets expurgés) seront envoyées à : $AiProvider" -ForegroundColor Yellow
+if ($SendToProvider) {
+    Write-Host "Les MÉTADONNÉES des objets (secrets expurgés) SERONT envoyées à : $AiProvider" -ForegroundColor Yellow
+} else {
+    Write-Host "DRY-RUN : -SendToProvider absent. RIEN n'est envoyé ; les métadonnées expurgées sont écrites localement uniquement." -ForegroundColor Yellow
+}
 Write-Host "Cet outil n'écrit JAMAIS dans un tenant. La sortie est pour revue uniquement." -ForegroundColor Yellow
-if (-not $AssumeYes) {
+if ($SendToProvider -and -not $AssumeYes) {
     $r = Read-Host "Continuer ? [o/N]"
     if ($r -notmatch '^[yYoO]') { Write-Host "Annulé."; return }
 }
 
 # --- Expurgation : retirer les valeurs secrètes avant tout envoi hors de la machine ---
+# Noms de propriété / clé dont la valeur est TOUJOURS expurgée (défense en profondeur).
+$secretKeys = @(
+    'secretReferenceValueId','value','password','omaSettingBase64',
+    'scriptContent','detectionScriptContent','remediationScriptContent',
+    'privateKey','certificate','token','connectionString','clientSecret'
+)
 function Remove-Secrets {
     param($Obj)
     if ($null -eq $Obj) { return $null }
@@ -93,12 +108,30 @@ function Remove-Secrets {
     if ($Obj -is [System.Collections.IDictionary]) {
         $o = [ordered]@{}
         foreach ($k in $Obj.Keys) {
-            if ($k -in 'secretReferenceValueId','value','password','omaSettingBase64','scriptContent','detectionScriptContent','remediationScriptContent') { $o[$k] = '<REDACTED>' }
+            if ($k -in $secretKeys) { $o[$k] = '<REDACTED>' }
             else { $o[$k] = Remove-Secrets $Obj[$k] }
         }
         return $o
     }
+    if ($Obj -is [System.Management.Automation.PSCustomObject]) {
+        $o = [ordered]@{}
+        foreach ($p in $Obj.PSObject.Properties) {
+            if ($p.Name -in $secretKeys) { $o[$p.Name] = '<REDACTED>' }
+            else { $o[$p.Name] = Remove-Secrets $p.Value }
+        }
+        return [pscustomobject]$o
+    }
     return $Obj
+}
+
+# --- Pré-scan strict : refuser de transmettre tout ce qui ressemble encore à un secret ---
+function Assert-NoSecret {
+    param([string]$Payload)
+    foreach ($pat in @('-----BEGIN','MII[A-Za-z0-9+/]{200,}','\b[0-9A-Fa-f]{40}\b')) {
+        if ($Payload -match $pat) {
+            throw "Pré-scan secret déclenché ('$pat') : interruption AVANT tout appel réseau. Rien n'a été envoyé."
+        }
+    }
 }
 
 # --- Appel chat provider-agnostique (compatible OpenAI) ---
@@ -108,22 +141,29 @@ function Invoke-AiChat {
     switch ($AiProvider) {
         'AzureOpenAI' {
             if (-not $AiEndpoint) { throw 'AzureOpenAI exige $AiEndpoint (URL complète chat/completions avec api-version).' }
-            $resp = Invoke-RestMethod -Method POST -Uri $AiEndpoint -Headers @{ 'api-key' = $AiApiKey } `
-                -ContentType 'application/json' -Body (($body) | ConvertTo-Json -Depth 12)
+            $uri = $AiEndpoint; $headers = @{ 'api-key' = $AiApiKey }
         }
         'OpenAI' {
             $body.model = if ($AiModel) { $AiModel } else { 'gpt-4.1-mini' }
             $uri = if ($AiEndpoint) { $AiEndpoint } else { 'https://api.openai.com/v1/chat/completions' }
-            $resp = Invoke-RestMethod -Method POST -Uri $uri -Headers @{ Authorization = "Bearer $AiApiKey" } `
-                -ContentType 'application/json' -Body (($body) | ConvertTo-Json -Depth 12)
+            $headers = @{ Authorization = "Bearer $AiApiKey" }
         }
         default { # Endpoint personnalisé compatible OpenAI
             if (-not $AiEndpoint) { throw 'Le provider Custom exige $AiEndpoint.' }
             if ($AiModel) { $body.model = $AiModel }
-            $resp = Invoke-RestMethod -Method POST -Uri $AiEndpoint -Headers @{ Authorization = "Bearer $AiApiKey" } `
-                -ContentType 'application/json' -Body (($body) | ConvertTo-Json -Depth 12)
+            $uri = $AiEndpoint; $headers = @{ Authorization = "Bearer $AiApiKey" }
         }
     }
+    # Défense en profondeur : expurger TOUT le payload récursivement avant qu'il ne quitte la machine.
+    $body = Remove-Secrets $body
+    $payloadJson = ($body | ConvertTo-Json -Depth 12)
+    # Pré-scan strict sur le payload sérialisé : un secret témoin interrompt ici, AVANT tout Invoke-RestMethod.
+    Assert-NoSecret -Payload $payloadJson
+    # Garde-fou opt-in réseau : sans -SendToProvider, AUCUNE sortie réseau (dry-run).
+    if (-not $SendToProvider) {
+        return "[DRY-RUN] -SendToProvider absent : aucun appel IA externe effectué. Métadonnées expurgées uniquement."
+    }
+    $resp = Invoke-RestMethod -Method POST -Uri $uri -Headers $headers -ContentType 'application/json' -Body $payloadJson
     return [string]$resp.choices[0].message.content
 }
 
@@ -189,7 +229,14 @@ foreach ($it in $manual) {
         continue
     }
     [void]$runbook.AppendLine("## $($it.Name)  ·  _$($it.Family)_`n")
-    [void]$runbook.AppendLine($answer + "`n---`n")
+    [void]$runbook.AppendLine($answer + "`n")
+    if (-not $SendToProvider) {
+        [void]$runbook.AppendLine("`n> DRY-RUN - rien n'a été envoyé. Métadonnées expurgées qui SERAIENT envoyées :`n")
+        [void]$runbook.AppendLine('```json')
+        [void]$runbook.AppendLine(($meta | ConvertTo-Json -Depth 20))
+        [void]$runbook.AppendLine('```')
+    }
+    [void]$runbook.AppendLine("`n---`n")
     $m = [regex]::Match($answer, '(?s)```powershell(.*?)```')
     if ($m.Success) {
         $safe = ($it.Name -replace '[^\w\.\- ]','_').Trim(); if ($safe.Length -gt 60) { $safe = $safe.Substring(0,60) }

@@ -543,8 +543,12 @@ try {
     Invoke-Verification
 
     if ($UseAIAssist) {
+        # AI step runs DRY-RUN by design: no -SendToProvider => ZERO external calls (it only writes
+        # redacted metadata locally). External send stays an explicit, separate human decision.
+        # Even if -RecoverSecrets rehydrated OMA secrets on disk under $script:ActiveSource, nothing
+        # leaves the machine here because -SendToProvider is deliberately NOT passed.
         Invoke-Step -Name 'Step 8 - AI recreation assistant (optional)' -LogPath '' -Action {
-            & $AIAssist -ExportPath $script:ActiveSource -OutputPath (Join-Path $OutputDir 'ai') -Language 'en' -AssumeYes
+            & $AIAssist -ExportPath $script:ActiveSource -OutputPath (Join-Path $OutputDir 'ai') -Language 'en'
         }
     }
 

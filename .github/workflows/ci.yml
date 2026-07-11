@@ -1,0 +1,28 @@
+name: CI
+
+# Hygiene gate: runs tools/check-no-secrets.ps1 over BOTH language trees (en/ and fr/).
+# The job fails (CI red) if either tree flags a potentially identifying value / secret.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Secret scan (en/ and fr/)
+        shell: pwsh
+        run: |
+          $fail = 0
+          Write-Host '== en/ =='
+          pwsh ./en/tools/check-no-secrets.ps1
+          if ($LASTEXITCODE -ne 0) { $fail = 1 }
+          Write-Host '== fr/ =='
+          pwsh ./fr/tools/check-no-secrets.ps1
+          if ($LASTEXITCODE -ne 0) { $fail = 1 }
+          if ($fail -ne 0) { throw 'check-no-secrets flagged potential secrets in en/ and/or fr/ (see output above).' }
+          Write-Host 'Secret scan passed for both en/ and fr/.'

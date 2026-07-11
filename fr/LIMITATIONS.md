@@ -33,7 +33,7 @@ Le kit énumère un ensemble fixe d'endpoints Intune ; tout ce qui est en dehors
 
 ## Hors périmètre par nature
 
-- **Conditional Access** — désormais exporté/importé **best-effort** : chaque politique est **créée DÉSACTIVÉE**, et ses références (utilisateurs, groupes, apps, emplacements nommés) sont des **IDs du tenant source à remapper** avant activation. Nécessite `Policy.Read.All` / `Policy.ReadWrite.ConditionalAccess`.
+- **Conditional Access** — exporté/importé **best-effort** : chaque politique est **créée DÉSACTIVÉE**. Ses références (utilisateurs, groupes, rôles, apps, emplacements nommés, service principals, conditions d'utilisation, authentication strength) sont **remappées vers le tenant cible** ; toute référence non résolvable fait **refuser la politique entière (fail-closed)** au lieu d'émettre un ID du tenant source. **À relire et activer manuellement.** Le scope CA est **opt-in** : l'outil d'app-registration accorde `Policy.ReadWrite.ConditionalAccess` uniquement avec **`-EnableConditionalAccess`**.
 - **Appareils, utilisateurs, hashes matériels Autopilot, rapports / données d'inventaire** — données
   d'exécution, pas de la configuration.
 
@@ -41,6 +41,8 @@ Le kit énumère un ensemble fixe d'endpoints Intune ; tout ce qui est en dehors
 
 - **Groupes, filtres, scope tags, ID d'apps** sont **remappés par nom** — les objets cibles doivent
   déjà exister (ou être créés) au préalable ; les références non résolues sont journalisées et ignorées.
+  **Les filtres d'affectation ne sont pas recréés** : une affectation filtrée dont le filtre est absent
+  de la cible est **bloquée** (jamais appliquée sans son filtre), pas élargie en silence.
 - **Apps Managed Google Play / VPP** doivent être approuvées et synchronisées dans le tenant cible
   avant que leurs app configurations ne s'appliquent.
 - **Données d'inventaire / rapports** = télémétrie d'exécution, pas de la configuration — hors périmètre.

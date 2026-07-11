@@ -543,8 +543,12 @@ try {
     Invoke-Verification
 
     if ($UseAIAssist) {
+        # L'etape IA tourne en DRY-RUN par conception : sans -SendToProvider => AUCUN appel externe
+        # (elle n'ecrit que des metadonnees expurgees en local). L'envoi externe reste une decision
+        # humaine explicite et separee. Meme si -RecoverSecrets a rehydrate des secrets OMA sur disque
+        # sous $script:ActiveSource, rien ne quitte la machine ici car -SendToProvider n'est PAS passe.
         Invoke-Step -Name 'Etape 8 - Assistant IA de recreation (optionnel)' -LogPath '' -Action {
-            & $AIAssist -ExportPath $script:ActiveSource -OutputPath (Join-Path $OutputDir 'ai') -Language 'fr' -AssumeYes
+            & $AIAssist -ExportPath $script:ActiveSource -OutputPath (Join-Path $OutputDir 'ai') -Language 'fr'
         }
     }
 

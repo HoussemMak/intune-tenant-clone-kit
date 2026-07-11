@@ -33,13 +33,15 @@ Recreate these at the portal, or handle them with a dedicated tool.
 
 ## Out of scope by design
 
-- **Conditional Access** — now exported/imported **best-effort**: each policy is **created DISABLED**, and its references (users, groups, apps, named locations) are **source-tenant IDs to remap** before enabling. Needs `Policy.Read.All` / `Policy.ReadWrite.ConditionalAccess`.
+- **Conditional Access** — exported/imported **best-effort**: each policy is **created DISABLED**. References (users, groups, roles, apps, named locations, service principals, terms-of-use, authentication strength) are **remapped to the target tenant**; any reference that cannot be resolved makes the whole policy **refused (fail-closed)** rather than emitting a source-tenant ID. **Review and enable manually.** The CA scope is **opt-in**: the app-registration tool grants `Policy.ReadWrite.ConditionalAccess` only with **`-EnableConditionalAccess`**.
 - **Devices, users, Autopilot hardware hashes, reports / inventory data** — runtime data, not configuration.
 
 ## Handled, but tenant-dependent
 
 - **Groups, filters, scope tags, app IDs** are **remapped by name** — the target objects must already
-  exist (or be created) first; unresolved references are logged and skipped.
+  exist (or be created) first; unresolved references are logged and skipped. **Assignment filters are not
+  auto-recreated**: a filtered assignment whose filter is absent in the target is **blocked** (never applied
+  without its filter), not silently widened.
 - **Managed Google Play / VPP apps** must be approved and synchronized in the target tenant before
   their app configurations apply.
 - **Device inventory / reports data** is runtime telemetry, not configuration — out of scope. This kit

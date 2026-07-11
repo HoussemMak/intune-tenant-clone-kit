@@ -1,6 +1,6 @@
 @{
     RootModule           = 'IntuneTenantCloneKit.psm1'
-    ModuleVersion        = '1.0.2'
+    ModuleVersion        = '2.0.0'
     GUID                 = '2dfaf5e5-83c3-4d11-97b5-edc8c1a1bd89'
     Author               = 'Houmak'
     CompanyName          = 'Minerva IA'
@@ -39,6 +39,28 @@
             LicenseUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit'
             ReleaseNotes = @'
+2.0.0  (security hardening - BREAKING)
+- SECURITY (P0): assignments are now FAIL-CLOSED. An unresolved exclusion group or assignment filter
+  BLOCKS the whole object instead of applying a partial set that would broaden scope. The switch
+  -AllowPartialAssignments is renamed -AllowPartialInclusionsOnly and may only omit a redundant
+  same-or-narrower inclusion, never widen scope. (Copy-IntuneAssignment)
+- SECURITY (P0): the "never write to the SOURCE tenant" safeguard is now parametric (compares
+  -SourceTenantId / -TargetTenantId), independent of the manifest file, and hard-fails on a missing or
+  corrupt manifest during a write phase. (Copy-IntuneAssignment)
+- SECURITY (P0): Invoke-IntuneAIAssist no longer sends anything externally by default. External calls
+  require the explicit -SendToProvider switch; a pre-send secret scan hard-fails before any network call;
+  secret redaction now handles PSCustomObject (previously a no-op) and a wider key set.
+- SECURITY (P0): Conditional Access import is remap-or-refuse. Every tenant-scoped reference class (users,
+  groups, roles, apps, named locations, service principals, terms-of-use, authentication strength) is
+  remapped to the target; role templates / well-known apps / built-in auth strengths pass through; any
+  unresolved reference REFUSES the whole policy (fail-closed), and a backstop refuses any source-tenant
+  GUID left in an unhandled slot. Policies are still created DISABLED.
+- SECURITY (P0): New-IntuneCloneAppRegistration is least-privilege by default - drops
+  DeviceManagementManagedDevices.* (device wipe), creates a NON-EXPORTABLE certificate, and gates
+  Policy.ReadWrite.ConditionalAccess behind -EnableConditionalAccess. Group.ReadWrite.All is kept on the
+  TARGET so a fresh tenant can still be provisioned.
+- CI: a secret-scan workflow (thumbprints, PEM/PFX blobs, OMA secrets) now runs on both en/ and fr/.
+
 1.0.2
 - Idempotence hardening: match existing target objects by a composite key (name + @odata.type /
   platform) instead of name alone, and update the seen-set after each CREATE. Prevents duplicates

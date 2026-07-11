@@ -17,7 +17,7 @@ $Stamp=(Get-Date -f yyyy-MM-dd_HHmm)
 $Src="$Kit\input\Export_$Stamp"; $Fixed=$Src; $Logs="$Kit\logs"; $Backup="$Kit\backup_$Stamp"
 $Report="$Kit\input\import-report.txt"           # (optional) report of a previous failed import, for the cleanup step
 $Pkg="$Kit\scripts"; $Engine="$Pkg\Import-IntuneConfig_Corrige_v3.ps1"; $Exporter="$Pkg\Export-IntuneConfig_FraisComplet_v1.ps1"
-$Scopes    =@('DeviceManagementConfiguration.ReadWrite.All','DeviceManagementApps.ReadWrite.All','DeviceManagementServiceConfig.ReadWrite.All','DeviceManagementRBAC.ReadWrite.All','DeviceManagementManagedDevices.ReadWrite.All','Policy.ReadWrite.ConditionalAccess')
+$Scopes    =@('DeviceManagementConfiguration.ReadWrite.All','DeviceManagementApps.ReadWrite.All','DeviceManagementServiceConfig.ReadWrite.All','DeviceManagementRBAC.ReadWrite.All')  # least-privilege write set (ManagedDevices dropped); add 'Policy.ReadWrite.ConditionalAccess' only if you clone Conditional Access
 $ScopesRead=@('DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All','DeviceManagementServiceConfig.Read.All','DeviceManagementRBAC.Read.All','Policy.Read.All')
 
 function Show-Tenant($expect){ $c=Get-MgContext; $o=$null; try{$o=(Invoke-MgGraphRequest GET 'https://graph.microsoft.com/v1.0/organization').value[0]}catch{}

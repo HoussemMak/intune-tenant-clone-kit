@@ -37,6 +37,10 @@
 .PARAMETER AssumeYes
     Skip the privacy confirmation prompt (for automation).
 
+.PARAMETER SendToProvider
+    Explicit opt-in to actually contact the AI provider over the network. WITHOUT this switch the
+    tool runs DRY-RUN: it redacts and writes metadata locally and makes ZERO network calls.
+
 .NOTES
     AI settings are read from config.ps1 (git-ignored) or environment variables. The API key is NEVER
     bundled with the kit:
@@ -53,7 +57,8 @@ param(
     [ValidateSet('en','fr')][string]$Language = 'en',
     [int]$MaxItems = 25,
     [string[]]$ExcludeFamilies,
-    [switch]$AssumeYes
+    [switch]$AssumeYes,
+    [switch]$SendToProvider
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,21 +72,31 @@ $AiEndpoint = if ($AiEndpoint) { $AiEndpoint } else { $env:INTUNE_AI_ENDPOINT }
 $AiApiKey   = if ($AiApiKey)   { $AiApiKey }   else { $env:INTUNE_AI_API_KEY }
 $AiModel    = if ($AiModel)    { $AiModel }    else { $env:INTUNE_AI_MODEL }
 
-if (-not $AiApiKey) {
-    throw "No AI API key. Set `$AiApiKey (and `$AiEndpoint / `$AiModel / `$AiProvider) in config.ps1, or the INTUNE_AI_* environment variables. The key is provided by YOU and never shipped with the kit."
+if ($SendToProvider -and -not $AiApiKey) {
+    throw "No AI API key. Set `$AiApiKey (and `$AiEndpoint / `$AiModel / `$AiProvider) in config.ps1, or the INTUNE_AI_* environment variables. The key is provided by YOU and never shipped with the kit. (A key is only required with -SendToProvider; dry-run needs none.)"
 }
 
 # --- Privacy gate (opt-in) ---
 Write-Host ""
 Write-Host "AI RECREATION ASSISTANT (experimental)" -ForegroundColor Magenta
-Write-Host "Object METADATA (secrets redacted) will be sent to: $AiProvider" -ForegroundColor Yellow
+if ($SendToProvider) {
+    Write-Host "Object METADATA (secrets redacted) WILL be sent to: $AiProvider" -ForegroundColor Yellow
+} else {
+    Write-Host "DRY-RUN: -SendToProvider not set. NOTHING is sent; redacted metadata is written locally only." -ForegroundColor Yellow
+}
 Write-Host "This tool NEVER writes to a tenant. Output is for review only." -ForegroundColor Yellow
-if (-not $AssumeYes) {
+if ($SendToProvider -and -not $AssumeYes) {
     $r = Read-Host "Proceed? [y/N]"
     if ($r -notmatch '^[yYoO]') { Write-Host "Cancelled."; return }
 }
 
 # --- Redaction: strip secret values before anything leaves the machine ---
+# Property / key names whose value is ALWAYS redacted (defense in depth).
+$secretKeys = @(
+    'secretReferenceValueId','value','password','omaSettingBase64',
+    'scriptContent','detectionScriptContent','remediationScriptContent',
+    'privateKey','certificate','token','connectionString','clientSecret'
+)
 function Remove-Secrets {
     param($Obj)
     if ($null -eq $Obj) { return $null }
@@ -91,12 +106,30 @@ function Remove-Secrets {
     if ($Obj -is [System.Collections.IDictionary]) {
         $o = [ordered]@{}
         foreach ($k in $Obj.Keys) {
-            if ($k -in 'secretReferenceValueId','value','password','omaSettingBase64','scriptContent','detectionScriptContent','remediationScriptContent') { $o[$k] = '<REDACTED>' }
+            if ($k -in $secretKeys) { $o[$k] = '<REDACTED>' }
             else { $o[$k] = Remove-Secrets $Obj[$k] }
         }
         return $o
     }
+    if ($Obj -is [System.Management.Automation.PSCustomObject]) {
+        $o = [ordered]@{}
+        foreach ($p in $Obj.PSObject.Properties) {
+            if ($p.Name -in $secretKeys) { $o[$p.Name] = '<REDACTED>' }
+            else { $o[$p.Name] = Remove-Secrets $p.Value }
+        }
+        return [pscustomobject]$o
+    }
     return $Obj
+}
+
+# --- Hard pre-scan: refuse to transmit anything that still looks like a secret ---
+function Assert-NoSecret {
+    param([string]$Payload)
+    foreach ($pat in @('-----BEGIN','MII[A-Za-z0-9+/]{200,}','\b[0-9A-Fa-f]{40}\b')) {
+        if ($Payload -match $pat) {
+            throw "Secret pre-scan tripped ('$pat'): aborting BEFORE any network call. Nothing was sent."
+        }
+    }
 }
 
 # --- Provider-agnostic chat call (OpenAI-compatible) ---
@@ -106,22 +139,29 @@ function Invoke-AiChat {
     switch ($AiProvider) {
         'AzureOpenAI' {
             if (-not $AiEndpoint) { throw 'AzureOpenAI requires $AiEndpoint (full chat/completions URL with api-version).' }
-            $resp = Invoke-RestMethod -Method POST -Uri $AiEndpoint -Headers @{ 'api-key' = $AiApiKey } `
-                -ContentType 'application/json' -Body (($body) | ConvertTo-Json -Depth 12)
+            $uri = $AiEndpoint; $headers = @{ 'api-key' = $AiApiKey }
         }
         'OpenAI' {
             $body.model = if ($AiModel) { $AiModel } else { 'gpt-4.1-mini' }
             $uri = if ($AiEndpoint) { $AiEndpoint } else { 'https://api.openai.com/v1/chat/completions' }
-            $resp = Invoke-RestMethod -Method POST -Uri $uri -Headers @{ Authorization = "Bearer $AiApiKey" } `
-                -ContentType 'application/json' -Body (($body) | ConvertTo-Json -Depth 12)
+            $headers = @{ Authorization = "Bearer $AiApiKey" }
         }
         default { # Custom OpenAI-compatible endpoint
             if (-not $AiEndpoint) { throw 'Custom provider requires $AiEndpoint.' }
             if ($AiModel) { $body.model = $AiModel }
-            $resp = Invoke-RestMethod -Method POST -Uri $AiEndpoint -Headers @{ Authorization = "Bearer $AiApiKey" } `
-                -ContentType 'application/json' -Body (($body) | ConvertTo-Json -Depth 12)
+            $uri = $AiEndpoint; $headers = @{ Authorization = "Bearer $AiApiKey" }
         }
     }
+    # Defense in depth: redact the WHOLE payload recursively before it can leave the machine.
+    $body = Remove-Secrets $body
+    $payloadJson = ($body | ConvertTo-Json -Depth 12)
+    # Hard pre-scan on the serialized payload: a witness secret aborts here, BEFORE any Invoke-RestMethod.
+    Assert-NoSecret -Payload $payloadJson
+    # Opt-in network gate: without -SendToProvider there is ZERO network egress (dry-run).
+    if (-not $SendToProvider) {
+        return "[DRY-RUN] -SendToProvider not set: no external AI call was made. Redacted metadata only."
+    }
+    $resp = Invoke-RestMethod -Method POST -Uri $uri -Headers $headers -ContentType 'application/json' -Body $payloadJson
     return [string]$resp.choices[0].message.content
 }
 
@@ -187,7 +227,14 @@ foreach ($it in $manual) {
         continue
     }
     [void]$runbook.AppendLine("## $($it.Name)  ·  _$($it.Family)_`n")
-    [void]$runbook.AppendLine($answer + "`n---`n")
+    [void]$runbook.AppendLine($answer + "`n")
+    if (-not $SendToProvider) {
+        [void]$runbook.AppendLine("`n> DRY-RUN - nothing was sent. Redacted metadata that WOULD be sent:`n")
+        [void]$runbook.AppendLine('```json')
+        [void]$runbook.AppendLine(($meta | ConvertTo-Json -Depth 20))
+        [void]$runbook.AppendLine('```')
+    }
+    [void]$runbook.AppendLine("`n---`n")
     $m = [regex]::Match($answer, '(?s)```powershell(.*?)```')
     if ($m.Success) {
         $safe = ($it.Name -replace '[^\w\.\- ]','_').Trim(); if ($safe.Length -gt 60) { $safe = $safe.Substring(0,60) }

@@ -46,6 +46,13 @@
 .PARAMETER StaticOnlyGroups
     Recree les groupes dynamiques en STATIQUE vide (ignore membershipRule) - plus sur en bac a sable.
 
+.PARAMETER AllowPartialInclusionsOnly
+    Phase Assign, assouplissement fail-closed. Autorise le POST d'un objet dont les SEULES cibles non
+    resolues sont des groupes d'INCLUSION (le sous-ensemble resolu est de portee identique ou plus
+    restreinte). Toute EXCLUSION ou tout FILTRE non resolu BLOQUE l'objet inconditionnellement (un
+    /assign partiel elargirait la portee). Une cible n'est jamais appliquee sans son filtre. Desactive
+    par defaut (fail-closed strict).
+
 .PARAMETER OnlyFamilies
     Limite la phase Assign a certaines familles (ex. 01_DeviceConfigurations).
 
@@ -69,6 +76,7 @@ param(
     [string]$WorkRoot = (Join-Path (Get-Location) 'IntuneExport_Assignments'),
     [switch]$Execute,
     [switch]$StaticOnlyGroups,
+    [switch]$AllowPartialInclusionsOnly,
     [string[]]$OnlyFamilies,
     [string]$LogPath
 )
@@ -189,6 +197,29 @@ function Get-SafeMailNickname {
 }
 
 # =========================================================================
+# GARDE-FOU ECRITURE (P0-6) - parametrique, independant du fichier manifest
+# =========================================================================
+function Assert-TargetIsNotSource {
+    param([Parameter(Mandatory=$true)][string]$Root,[Parameter(Mandatory=$true)][string]$Phase)
+    # HARD-FAIL : une phase d'ecriture ne doit jamais s'executer sans le manifest d'export (pas de skip silencieux).
+    $manifestPath = Join-Path $Root 'manifest-assignments.json'
+    if (-not (Test-Path $manifestPath)) {
+        throw "GARDE-FOU ($Phase) : manifest-assignments.json absent dans $Root - phase d'ecriture refusee (lancer la phase Export d'abord)."
+    }
+    $manifestSource = $null
+    try { $manifestSource = (Get-Content $manifestPath -Raw | ConvertFrom-Json).TenantId }
+    catch { throw "GARDE-FOU ($Phase) : manifest-assignments.json dans $Root illisible/corrompu - phase d'ecriture refusee (relancer la phase Export)." }
+    # Garde PARAMETRIQUE (independante du fichier) : la CIBLE ne doit jamais etre egale au tenant SOURCE,
+    # quel que soit l'etat du manifest. -SourceTenantId (parametre) prime ; le TenantId du manifest n'est qu'un repli.
+    $effectiveSource = if (-not [string]::IsNullOrWhiteSpace($SourceTenantId)) { $SourceTenantId } else { $manifestSource }
+    if (-not [string]::IsNullOrWhiteSpace($effectiveSource) -and -not [string]::IsNullOrWhiteSpace($TargetTenantId) `
+        -and ($TargetTenantId.ToLowerInvariant() -eq $effectiveSource.ToLowerInvariant())) {
+        throw "GARDE-FOU ($Phase) : TargetTenantId ($TargetTenantId) identique au tenant SOURCE. Ecriture refusee."
+    }
+    return $manifestSource
+}
+
+# =========================================================================
 # PHASE EXPORT (SOURCE, lecture seule)
 # =========================================================================
 function Invoke-ExportPhase {
@@ -287,9 +318,8 @@ function Invoke-GroupsPhase {
     if (-not (Test-Path $catalogPath)) { throw "groups-catalog.json introuvable dans $Root (lancer la phase Export d'abord)." }
     $catalog = @(Get-Content $catalogPath -Raw | ConvertFrom-Json)
 
-    $srcTenant = $null
-    $manifestPath = Join-Path $Root 'manifest-assignments.json'
-    if (Test-Path $manifestPath) { try { $srcTenant = (Get-Content $manifestPath -Raw | ConvertFrom-Json).TenantId } catch {} }
+    # P0-6 : GARDE-FOU independant du fichier (Cible != Source) + hard-fail si le manifest est absent.
+    $srcTenant = Assert-TargetIsNotSource -Root $Root -Phase 'Groups'
 
     Write-Info "Phase GROUPS - connexion app-only CIBLE ($TargetTenantId)"
     Connect-GraphForIntuneAutomation -TenantId $TargetTenantId -Scopes @('Group.ReadWrite.All')
@@ -387,9 +417,8 @@ function Invoke-AssignPhase {
     $records = @(Get-Content $assignPath -Raw | ConvertFrom-Json)
     if ($OnlyFamilies) { $records = @($records | Where-Object { $OnlyFamilies -contains $_.Family }) }
 
-    $srcTenant = $null
-    $manifestPath = Join-Path $Root 'manifest-assignments.json'
-    if (Test-Path $manifestPath) { try { $srcTenant = (Get-Content $manifestPath -Raw | ConvertFrom-Json).TenantId } catch {} }
+    # P0-6 : GARDE-FOU independant du fichier (Cible != Source) + hard-fail si le manifest est absent.
+    $srcTenant = Assert-TargetIsNotSource -Root $Root -Phase 'Assign'
 
     $groupNameByOldId = @{}
     $catalogPath = Join-Path $Root 'groups-catalog.json'
@@ -466,15 +495,21 @@ function Invoke-AssignPhase {
             $targetId = $tgtByName[$nameKey]
 
             $newAssignments=@(); $droppedHere=0
+            # P0-2 fail-CLOSED : suivre separement les inclusions et exclusions non resolues.
+            $hadUnresolvedInclusion = $false
+            $hadUnresolvedExclusion = $false
             foreach ($a in @($rec.Assignments)) {
                 $t = $a.target; if (-not $t) { continue }
                 $type = $t.'@odata.type'
+                $isExclusion = ($type -match 'exclusionGroupAssignmentTarget')
                 $newTarget = [ordered]@{ '@odata.type' = $type }
                 if ($type -match 'groupAssignmentTarget' -or $type -match 'exclusionGroupAssignmentTarget') {
                     $newGid = & $resolveGroup $t.groupId
                     if (-not $newGid) {
                         $droppedHere++
-                        $unresolved += [pscustomobject]@{ Family=$famName; Object=$rec.ObjectName; Kind='GROUPE'; OldId=$t.groupId; Name=$groupNameByOldId[$t.groupId] }
+                        $unresolved += [pscustomobject]@{ Family=$famName; Object=$rec.ObjectName; Kind=$(if($isExclusion){'GROUPE (exclusion)'}else{'GROUPE (inclusion)'}); OldId=$t.groupId; Name=$groupNameByOldId[$t.groupId] }
+                        # Une EXCLUSION non resolue ELARGIRAIT la portee -> bloquer ; une INCLUSION non resolue ne fait que la restreindre.
+                        if ($isExclusion) { $hadUnresolvedExclusion = $true } else { $hadUnresolvedInclusion = $true }
                         continue
                     }
                     $newTarget.groupId = $newGid
@@ -486,12 +521,29 @@ function Invoke-AssignPhase {
                         $newTarget.deviceAndAppManagementAssignmentFilterId = $newFid
                         $newTarget.deviceAndAppManagementAssignmentFilterType = $t.deviceAndAppManagementAssignmentFilterType
                     } else {
-                        $unresolved += [pscustomobject]@{ Family=$famName; Object=$rec.ObjectName; Kind='FILTRE (retire)'; OldId=$oldFilterId; Name=$filterNameByOldId[$oldFilterId] }
+                        # Un filtre manquant restreint la portee : ne JAMAIS appliquer la cible sans lui -> traiter comme la classe EXCLUSION.
+                        $droppedHere++
+                        $unresolved += [pscustomobject]@{ Family=$famName; Object=$rec.ObjectName; Kind='FILTRE (non resolu)'; OldId=$oldFilterId; Name=$filterNameByOldId[$oldFilterId] }
+                        $hadUnresolvedExclusion = $true
+                        continue
                     }
                 }
                 $entry = [ordered]@{ target = $newTarget }
                 if ($a.intent) { $entry.intent = $a.intent }
                 $newAssignments += $entry
+            }
+
+            # P0-2 fail-CLOSED : /assign remplace TOUT le jeu d'affectations ; un jeu partiel qui omet une exclusion ou
+            # un filtre ELARGIRAIT la portee. Bloquer ces objets INCONDITIONNELLEMENT (jamais de POST), quel que soit le switch.
+            if ($hadUnresolvedExclusion) {
+                Add-Log $famName $rec.ObjectName 'BLOCKED' 'exclusion ou filtre non resolu (les filtres ne sont pas recrees dans la cible) - la portee serait elargie, affectation refusee'
+                Write-Bad ("  [BLOCKED] {0} : exclusion/filtre non resolu - portee elargie (creer le filtre/groupe d'exclusion dans la cible, ou relancer sans)" -f $rec.ObjectName)
+                continue
+            }
+            if ($hadUnresolvedInclusion -and -not $AllowPartialInclusionsOnly) {
+                Add-Log $famName $rec.ObjectName 'BLOCKED' ("inclusion non resolue ({0}) - utiliser -AllowPartialInclusionsOnly pour appliquer le sous-ensemble resolu (identique ou plus restreint)" -f $droppedHere)
+                Write-Bad ("  [BLOCKED] {0} : inclusion non resolue (ajouter -AllowPartialInclusionsOnly pour autoriser)" -f $rec.ObjectName)
+                continue
             }
 
             if ($newAssignments.Count -eq 0) {

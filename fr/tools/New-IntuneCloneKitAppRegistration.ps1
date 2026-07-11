@@ -36,6 +36,10 @@
 .PARAMETER SkipConsent
     Ne pas tenter le consentement admin par script (a faire ensuite au portail).
 
+.PARAMETER EnableConditionalAccess
+    (Cible uniquement) Demander aussi Policy.ReadWrite.ConditionalAccess. Absent par defaut :
+    les strategies d'acces conditionnel ne sont pas clonees sauf si ce switch est fourni.
+
 .EXAMPLE
     .\New-IntuneCloneKitAppRegistration.ps1 -TenantId <SRC> -Role Source
     .\New-IntuneCloneKitAppRegistration.ps1 -TenantId <TGT> -Role Target
@@ -47,7 +51,8 @@ param(
     [string]$DisplayName,
     [string]$CertThumbprint,
     [int]$CertYears = 2,
-    [switch]$SkipConsent
+    [switch]$SkipConsent,
+    [switch]$EnableConditionalAccess
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,14 +64,16 @@ if (-not $DisplayName) { $DisplayName = "IntuneCloneKit-$Role" }
 $PermsSource = @(
     'DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All',
     'DeviceManagementServiceConfig.Read.All','DeviceManagementRBAC.Read.All',
-    'DeviceManagementManagedDevices.Read.All','Group.Read.All','Organization.Read.All','Policy.Read.All'
+    'Group.Read.All','Organization.Read.All','Policy.Read.All'
 )
 $PermsTarget = @(
     'DeviceManagementConfiguration.ReadWrite.All','DeviceManagementApps.ReadWrite.All',
     'DeviceManagementServiceConfig.ReadWrite.All','DeviceManagementRBAC.ReadWrite.All',
-    'DeviceManagementManagedDevices.ReadWrite.All','Group.ReadWrite.All','Organization.Read.All','Policy.ReadWrite.ConditionalAccess'
+    'Group.ReadWrite.All','Organization.Read.All'
 )
 $Perms = if ($Role -eq 'Source') { $PermsSource } else { $PermsTarget }
+# L'ecriture Acces conditionnel est opt-in (cible uniquement) : les strategies CA ne sont pas clonees sauf demande explicite.
+if ($EnableConditionalAccess -and $Role -eq 'Target') { $Perms += 'Policy.ReadWrite.ConditionalAccess' }
 
 function Info { param($T) Write-Host ("[INFO] {0}" -f $T) -ForegroundColor Cyan }
 function Ok   { param($T) Write-Host ("[OK]   {0}" -f $T) -ForegroundColor Green }
@@ -114,7 +121,7 @@ if ($CertThumbprint) {
     $subject = "CN=IntuneCloneKit-$Role"
     Info ("Creation d'un certificat auto-signe {0} (valide {1} an(s))..." -f $subject, $CertYears)
     $cert = New-SelfSignedCertificate -Subject $subject -CertStoreLocation 'Cert:\CurrentUser\My' `
-        -KeyExportPolicy Exportable -KeySpec Signature -KeyLength 2048 `
+        -KeyExportPolicy NonExportable -KeySpec Signature -KeyLength 2048 `
         -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears($CertYears)
     Ok ("Certificat cree : {0}" -f $cert.Thumbprint)
 }

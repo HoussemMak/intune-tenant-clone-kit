@@ -51,6 +51,7 @@ param(
     [switch]$IncludeScopeTags,
     [string]$NamePrefix = '',
     [string]$AppIdMapPath = '',
+    [string]$CaIdMapPath = '',
     [string]$LogPath = (Join-Path (Get-Location) ("logs\import_v3_{0}.csv" -f (Get-Date -Format 'yyyyMMdd_HHmmss')))
 )
 
@@ -64,6 +65,46 @@ if ($AppIdMapPath -and (Test-Path -LiteralPath $AppIdMapPath)) {
     try { Import-Csv -LiteralPath $AppIdMapPath | ForEach-Object { if ($_.SourceId) { $script:AppIdMap[[string]$_.SourceId] = [string]$_.TargetId } } }
     catch { Write-Host ("  [!] AppIdMap unreadable ({0}) : {1}" -f $AppIdMapPath,$_.Exception.Message) -ForegroundColor Yellow }
 }
+
+# --- Conditional Access reference remap (P0-5): flat SOURCE-GUID -> TARGET-GUID map for TENANT-SCOPED
+#     CA references (groups, users, named-locations, custom enterprise apps, terms-of-use). Loaded from
+#     an optional CSV (columns SourceId,TargetId). FAIL-CLOSED: any tenant-scoped reference absent from
+#     this map (or with no map at all) is treated as UNRESOLVED and the CA policy is REFUSED (never
+#     emitted with a source GUID). Inter-tenant CONSTANTS (role templates, well-known Microsoft apps,
+#     special tokens) pass through unchanged and are NEVER looked up here.
+$script:CaIdMap = @{}
+if ($CaIdMapPath -and (Test-Path -LiteralPath $CaIdMapPath)) {
+    try { Import-Csv -LiteralPath $CaIdMapPath | ForEach-Object { if ($_.SourceId) { $script:CaIdMap[[string]$_.SourceId] = [string]$_.TargetId } } }
+    catch { Write-Host ("  [!] CaIdMap unreadable ({0}) : {1}" -f $CaIdMapPath,$_.Exception.Message) -ForegroundColor Yellow }
+}
+# Inter-tenant CONSTANTS that must pass through a CA policy unchanged (NOT tenant-scoped GUIDs).
+$script:CaSpecialUsers     = @('All','None','GuestsOrExternalUsers')
+$script:CaSpecialLocations = @('All','AllTrusted')
+# Well-known first-party Microsoft appIds are GLOBAL (identical in every tenant) -> pass unchanged.
+$script:CaWellKnownAppIds  = @(
+    '00000002-0000-0ff1-ce00-000000000000', # Office 365 Exchange Online
+    '00000003-0000-0ff1-ce00-000000000000', # Office 365 SharePoint Online
+    '00000004-0000-0ff1-ce00-000000000000', # Skype for Business Online
+    '00000005-0000-0ff1-ce00-000000000000', # Office 365 Yammer
+    '00000006-0000-0ff1-ce00-000000000000', # Office 365 Portal
+    '00000007-0000-0ff1-ce00-000000000000', # Dynamics CRM Online
+    '00000003-0000-0000-c000-000000000000', # Microsoft Graph
+    '00000009-0000-0000-c000-000000000000', # Power BI Service
+    '0000000a-0000-0000-c000-000000000000', # Microsoft Intune
+    '00000012-0000-0000-c000-000000000000', # Microsoft Rights Management Services
+    '797f4846-ba00-4fd7-ba43-dac1f8f63013', # Windows Azure Service Management API
+    'c44b4083-3bb0-49c1-b47d-974e53cbdf3c', # Microsoft Azure Portal
+    '1fec8e78-bce4-4aaf-ab1b-5451cc387264', # Microsoft Teams
+    'cc15fd57-2c6c-4117-a88c-83b1d56b4bbe', # Microsoft Teams Services
+    'd4ebce55-015a-49b5-a083-c84d1797ae8c'  # Microsoft Intune Enrollment
+)
+$script:CaConstantApps = @('All','None','Office365','MicrosoftAdminPortals') + $script:CaWellKnownAppIds
+# Built-in authentication strength policy ids are GLOBAL constants (identical in every tenant) -> pass unchanged.
+$script:CaBuiltInAuthStrength = @(
+    '00000000-0000-0000-0000-000000000002', # Multifactor authentication
+    '00000000-0000-0000-0000-000000000003', # Passwordless MFA
+    '00000000-0000-0000-0000-000000000004'  # Phishing-resistant MFA
+)
 
 # App types NOT clonable by metadata alone (binary content / license) -> manual.
 $AppTypesManual = @(
@@ -230,6 +271,98 @@ function New-ContentScriptPayload {
     New-GenericPayload -O $O -Cat $Cat
 }
 
+# ---- Conditional Access remap-or-refuse (P0-5) ----------------------------------------------------
+function Resolve-CaRefList {
+    # Remap a list of CA references: pass CONSTANTS through unchanged, remap tenant-scoped GUIDs via the
+    # CA id-map, THROW (fail-closed) on any unresolved tenant-scoped reference. Every emitted value (remapped
+    # target OR passed-through constant) is recorded in $script:CaEmitted so the fail-closed backstop below
+    # can tell a legitimate constant from a leaked source id. -AllConstant marks a whole class as inter-tenant
+    # constant (e.g. include/excludeRoles = directory role TEMPLATE ids).
+    param($List,[string[]]$Constants,[string]$Slot,[switch]$AllConstant)
+    $out = @()
+    foreach ($ref in @($List)) {
+        $s = [string]$ref
+        if ([string]::IsNullOrWhiteSpace($s)) { continue }
+        if ($AllConstant -or ($Constants -contains $s)) { $out += $s; [void]$script:CaEmitted.Add($s); continue }
+        $t = $script:CaIdMap[$s]
+        if ([string]::IsNullOrWhiteSpace($t)) {
+            throw "SKIP_UNRESOLVED_CA_REF : $Slot reference '$s' has no target mapping (CaIdMap) -> CA policy refused (fail-closed)."
+        }
+        $out += $t; [void]$script:CaEmitted.Add([string]$t)
+    }
+    return ,@($out)
+}
+
+function Resolve-CaReferences {
+    # Remap EVERY tenant-scoped reference class of a CA policy IN PLACE; throw to refuse the whole policy
+    # if any reference cannot be resolved. Role TEMPLATES, well-known Microsoft apps and built-in auth
+    # strengths pass unchanged. A fail-closed BACKSTOP then scans the conditions/grantControls subtrees and
+    # refuses the policy if ANY GUID we did not deliberately emit survives (unhandled/unmapped source ref) --
+    # this catches slots we do not remap explicitly (external tenants, custom auth strength, device states...).
+    param([hashtable]$O)
+    $script:CaEmitted = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $cond = $O['conditions']
+    if ($cond -is [hashtable]) {
+        $users = $cond['users']
+        if ($users -is [hashtable]) {
+            foreach ($slot in 'includeUsers','excludeUsers') {
+                if ($users.ContainsKey($slot)) { $users[$slot] = Resolve-CaRefList -List $users[$slot] -Constants $script:CaSpecialUsers -Slot "users.$slot" }
+            }
+            foreach ($slot in 'includeGroups','excludeGroups') {
+                if ($users.ContainsKey($slot)) { $users[$slot] = Resolve-CaRefList -List $users[$slot] -Constants @() -Slot "users.$slot" }
+            }
+            foreach ($slot in 'includeRoles','excludeRoles') {
+                # Directory role TEMPLATE ids are inter-tenant constants: pass unchanged (never route through an Intune map).
+                if ($users.ContainsKey($slot)) { $users[$slot] = Resolve-CaRefList -List $users[$slot] -AllConstant -Slot "users.$slot" }
+            }
+        }
+        $apps = $cond['applications']
+        if ($apps -is [hashtable]) {
+            foreach ($slot in 'includeApplications','excludeApplications') {
+                if ($apps.ContainsKey($slot)) { $apps[$slot] = Resolve-CaRefList -List $apps[$slot] -Constants $script:CaConstantApps -Slot "applications.$slot" }
+            }
+        }
+        $capps = $cond['clientApplications']
+        if ($capps -is [hashtable]) {
+            foreach ($slot in 'includeServicePrincipals','excludeServicePrincipals') {
+                # service principals are tenant-scoped: remap via CaIdMap or refuse (fail-closed).
+                if ($capps.ContainsKey($slot)) { $capps[$slot] = Resolve-CaRefList -List $capps[$slot] -Constants @('ServicePrincipalsInMyTenant','None') -Slot "clientApplications.$slot" }
+            }
+        }
+        $locs = $cond['locations']
+        if ($locs -is [hashtable]) {
+            foreach ($slot in 'includeLocations','excludeLocations') {
+                # named-locations: no dedicated map => refs fall through to CaIdMap; absent => refused (fail-closed).
+                if ($locs.ContainsKey($slot)) { $locs[$slot] = Resolve-CaRefList -List $locs[$slot] -Constants $script:CaSpecialLocations -Slot "locations.$slot" }
+            }
+        }
+    }
+    $grant = $O['grantControls']
+    if ($grant -is [hashtable]) {
+        if ($grant.ContainsKey('termsOfUse')) {
+            $grant['termsOfUse'] = Resolve-CaRefList -List $grant['termsOfUse'] -Constants @() -Slot 'grantControls.termsOfUse'
+        }
+        $as = $grant['authenticationStrength']
+        if ($as -is [hashtable] -and $as.ContainsKey('id')) {
+            # built-in auth strengths are global constants; a custom (tenant-scoped) id has no target map -> refused.
+            $as['id'] = @(Resolve-CaRefList -List @($as['id']) -Constants $script:CaBuiltInAuthStrength -Slot 'grantControls.authenticationStrength.id')[0]
+        }
+    }
+    # Fail-closed backstop: no source-tenant GUID may survive in the conditions/grantControls subtrees.
+    # Everything we deliberately remapped or passed through is in $script:CaEmitted; a GUID left in an
+    # unhandled/unmapped slot is refused rather than emitted. (Top-level id/templateId/dates are NOT scanned.)
+    foreach ($sub in @($O['conditions'], $O['grantControls'])) {
+        if ($null -eq $sub) { continue }
+        $blob = ($sub | ConvertTo-Json -Depth 100 -Compress)
+        foreach ($mm in ([regex]'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}').Matches($blob)) {
+            $g = $mm.Value
+            if ($script:CaEmitted.Contains($g)) { continue }
+            if ($script:CaWellKnownAppIds -contains $g) { continue }
+            throw "SKIP_UNRESOLVED_CA_REF : GUID '$g' in an unhandled/unmapped CA slot -> CA policy refused (fail-closed; never emit a source-tenant id)."
+        }
+    }
+}
+
 function Build-Payload {
     param([hashtable]$O,$Cat)
     switch ($Cat.Special) {
@@ -262,7 +395,9 @@ function Build-Payload {
             return (New-GenericPayload -O $O -Cat $Cat)
         }
         'ConditionalAccess' {
-            $O['state'] = 'disabled'   # create disabled for safety; references are source-tenant IDs to remap
+            # P0-5 : remap-or-refuse. Create DISABLED, and NEVER emit a source-tenant GUID in ANY slot.
+            $O['state'] = 'disabled'
+            Resolve-CaReferences -O $O
             return (New-GenericPayload -O $O -Cat $Cat)
         }
         default { return (New-GenericPayload -O $O -Cat $Cat) }
@@ -318,7 +453,7 @@ foreach ($cat in $selected) {
         if ($NamePrefix -and $payload.Contains($cat.Name)) { $payload[$cat.Name] = $name }
 
         if (-not $Execute) {
-            $extra = if ($cat.Special -eq 'SettingsCatalog') { "settings=$((@($payload['settings'])).Count)" } else { '' }
+            $extra = if ($cat.Special -eq 'SettingsCatalog') { "settings=$((@($payload['settings'])).Count)" } elseif ($cat.Special -eq 'ConditionalAccess') { 'DISABLED / manual-enable-required' } else { '' }
             Add-Result $cat.Folder $name 'PREVIEW' $extra $null $null
             Write-Host ("  [.] PREVIEW {0} {1}" -f $name,$extra) -ForegroundColor Gray
             continue
@@ -327,7 +462,12 @@ foreach ($cat in $selected) {
         try {
             $json = $payload | ConvertTo-Json -Depth 100
             $created = Invoke-MgGraphRequest -Method POST -Uri "$GraphBase/$($cat.Path)" -Body $json -ContentType 'application/json'
-            Add-Result $cat.Folder $name 'CREATED' '' $created.id $null
+            if ($cat.Special -eq 'ConditionalAccess') {
+                # Distinct outcome: a CA created DISABLED with remapped refs is NEVER a completed clone (manual enable required).
+                Add-Result $cat.Folder $name 'CREATED-DISABLED' 'Created-DISABLED / references-remapped / manual-enable-required' $created.id $null
+            } else {
+                Add-Result $cat.Folder $name 'CREATED' '' $created.id $null
+            }
             [void]$existingKeys.Add($key)   # avoid a duplicate if 2 source files share the same key in one run
             Write-Host ("  [+] {0}" -f $name) -ForegroundColor Green
 

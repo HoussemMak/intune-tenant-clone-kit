@@ -46,6 +46,12 @@
 .PARAMETER StaticOnlyGroups
     Recreates dynamic groups as empty STATIC (ignores membershipRule) - safer in a sandbox.
 
+.PARAMETER AllowPartialInclusionsOnly
+    Assign phase, fail-closed relaxation. Allows POSTing an object whose ONLY unresolved targets are
+    INCLUSION groups (the resolved subset is same-or-narrower in scope). Unresolved EXCLUSIONS or
+    FILTERS always BLOCK the object unconditionally (a partial /assign would broaden scope). A target
+    is never applied without its filter. Off by default (strict fail-closed).
+
 .PARAMETER OnlyFamilies
     Limits the Assign phase to certain families (e.g. 01_DeviceConfigurations).
 
@@ -69,6 +75,7 @@ param(
     [string]$WorkRoot = (Join-Path (Get-Location) 'IntuneExport_Assignments'),
     [switch]$Execute,
     [switch]$StaticOnlyGroups,
+    [switch]$AllowPartialInclusionsOnly,
     [string[]]$OnlyFamilies,
     [string]$LogPath
 )
@@ -189,6 +196,29 @@ function Get-SafeMailNickname {
 }
 
 # =========================================================================
+# WRITE SAFEGUARD (P0-6) - parametric, independent of the manifest file
+# =========================================================================
+function Assert-TargetIsNotSource {
+    param([Parameter(Mandatory=$true)][string]$Root,[Parameter(Mandatory=$true)][string]$Phase)
+    # HARD-FAIL: a write phase must never run without the export manifest (no silent skip).
+    $manifestPath = Join-Path $Root 'manifest-assignments.json'
+    if (-not (Test-Path $manifestPath)) {
+        throw "SAFEGUARD ($Phase): manifest-assignments.json is absent in $Root - write phase refused (run the Export phase first)."
+    }
+    $manifestSource = $null
+    try { $manifestSource = (Get-Content $manifestPath -Raw | ConvertFrom-Json).TenantId }
+    catch { throw "SAFEGUARD ($Phase): manifest-assignments.json in $Root is unreadable/corrupt - write phase refused (re-run the Export phase)." }
+    # PARAMETRIC guard (file-independent): the TARGET must never equal the SOURCE tenant, whatever the
+    # manifest state. -SourceTenantId (param) wins; the manifest TenantId is only a fallback source.
+    $effectiveSource = if (-not [string]::IsNullOrWhiteSpace($SourceTenantId)) { $SourceTenantId } else { $manifestSource }
+    if (-not [string]::IsNullOrWhiteSpace($effectiveSource) -and -not [string]::IsNullOrWhiteSpace($TargetTenantId) `
+        -and ($TargetTenantId.ToLowerInvariant() -eq $effectiveSource.ToLowerInvariant())) {
+        throw "SAFEGUARD ($Phase): TargetTenantId ($TargetTenantId) is identical to the SOURCE tenant. Write refused."
+    }
+    return $manifestSource
+}
+
+# =========================================================================
 # EXPORT PHASE (SOURCE, read-only)
 # =========================================================================
 function Invoke-ExportPhase {
@@ -287,9 +317,8 @@ function Invoke-GroupsPhase {
     if (-not (Test-Path $catalogPath)) { throw "groups-catalog.json not found in $Root (run the Export phase first)." }
     $catalog = @(Get-Content $catalogPath -Raw | ConvertFrom-Json)
 
-    $srcTenant = $null
-    $manifestPath = Join-Path $Root 'manifest-assignments.json'
-    if (Test-Path $manifestPath) { try { $srcTenant = (Get-Content $manifestPath -Raw | ConvertFrom-Json).TenantId } catch {} }
+    # P0-6: file-independent SAFEGUARD (Target != Source) + hard-fail if the manifest is missing.
+    $srcTenant = Assert-TargetIsNotSource -Root $Root -Phase 'Groups'
 
     Write-Info "GROUPS phase - app-only TARGET connection ($TargetTenantId)"
     Connect-GraphForIntuneAutomation -TenantId $TargetTenantId -Scopes @('Group.ReadWrite.All')
@@ -387,9 +416,8 @@ function Invoke-AssignPhase {
     $records = @(Get-Content $assignPath -Raw | ConvertFrom-Json)
     if ($OnlyFamilies) { $records = @($records | Where-Object { $OnlyFamilies -contains $_.Family }) }
 
-    $srcTenant = $null
-    $manifestPath = Join-Path $Root 'manifest-assignments.json'
-    if (Test-Path $manifestPath) { try { $srcTenant = (Get-Content $manifestPath -Raw | ConvertFrom-Json).TenantId } catch {} }
+    # P0-6: file-independent SAFEGUARD (Target != Source) + hard-fail if the manifest is missing.
+    $srcTenant = Assert-TargetIsNotSource -Root $Root -Phase 'Assign'
 
     $groupNameByOldId = @{}
     $catalogPath = Join-Path $Root 'groups-catalog.json'
@@ -466,15 +494,21 @@ function Invoke-AssignPhase {
             $targetId = $tgtByName[$nameKey]
 
             $newAssignments=@(); $droppedHere=0
+            # P0-2 fail-CLOSED: track unresolved inclusions and exclusions separately.
+            $hadUnresolvedInclusion = $false
+            $hadUnresolvedExclusion = $false
             foreach ($a in @($rec.Assignments)) {
                 $t = $a.target; if (-not $t) { continue }
                 $type = $t.'@odata.type'
+                $isExclusion = ($type -match 'exclusionGroupAssignmentTarget')
                 $newTarget = [ordered]@{ '@odata.type' = $type }
                 if ($type -match 'groupAssignmentTarget' -or $type -match 'exclusionGroupAssignmentTarget') {
                     $newGid = & $resolveGroup $t.groupId
                     if (-not $newGid) {
                         $droppedHere++
-                        $unresolved += [pscustomobject]@{ Family=$famName; Object=$rec.ObjectName; Kind='GROUP'; OldId=$t.groupId; Name=$groupNameByOldId[$t.groupId] }
+                        $unresolved += [pscustomobject]@{ Family=$famName; Object=$rec.ObjectName; Kind=$(if($isExclusion){'GROUP (exclusion)'}else{'GROUP (inclusion)'}); OldId=$t.groupId; Name=$groupNameByOldId[$t.groupId] }
+                        # An unresolved EXCLUSION would BROADEN scope -> block; an unresolved INCLUSION only narrows it.
+                        if ($isExclusion) { $hadUnresolvedExclusion = $true } else { $hadUnresolvedInclusion = $true }
                         continue
                     }
                     $newTarget.groupId = $newGid
@@ -486,12 +520,29 @@ function Invoke-AssignPhase {
                         $newTarget.deviceAndAppManagementAssignmentFilterId = $newFid
                         $newTarget.deviceAndAppManagementAssignmentFilterType = $t.deviceAndAppManagementAssignmentFilterType
                     } else {
-                        $unresolved += [pscustomobject]@{ Family=$famName; Object=$rec.ObjectName; Kind='FILTER (removed)'; OldId=$oldFilterId; Name=$filterNameByOldId[$oldFilterId] }
+                        # A missing filter restricts scope: NEVER apply the target without it -> treat as EXCLUSION class.
+                        $droppedHere++
+                        $unresolved += [pscustomobject]@{ Family=$famName; Object=$rec.ObjectName; Kind='FILTER (unresolved)'; OldId=$oldFilterId; Name=$filterNameByOldId[$oldFilterId] }
+                        $hadUnresolvedExclusion = $true
+                        continue
                     }
                 }
                 $entry = [ordered]@{ target = $newTarget }
                 if ($a.intent) { $entry.intent = $a.intent }
                 $newAssignments += $entry
+            }
+
+            # P0-2 fail-CLOSED gate: /assign is a full replace, so a partial set that drops an exclusion or a
+            # filter would BROADEN scope. Block such objects UNCONDITIONALLY (never POST), whatever the switch.
+            if ($hadUnresolvedExclusion) {
+                Add-Log $famName $rec.ObjectName 'BLOCKED' 'unresolved exclusion or filter (filters are not auto-recreated in the target) - scope would broaden, assignment refused'
+                Write-Bad ("  [BLOCKED] {0} : unresolved exclusion/filter - scope would broaden (create the filter/exclusion group in the target, or re-run without it)" -f $rec.ObjectName)
+                continue
+            }
+            if ($hadUnresolvedInclusion -and -not $AllowPartialInclusionsOnly) {
+                Add-Log $famName $rec.ObjectName 'BLOCKED' ("unresolved inclusion ({0}) - use -AllowPartialInclusionsOnly to apply the resolved same-or-narrower subset" -f $droppedHere)
+                Write-Bad ("  [BLOCKED] {0} : unresolved inclusion (add -AllowPartialInclusionsOnly to allow)" -f $rec.ObjectName)
+                continue
             }
 
             if ($newAssignments.Count -eq 0) {
