@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > re-enroll and secrets/tokens re-pair (a cryptographic ceiling no tool crosses).
 > We clone the configuration; we guide the rest.
 
-## [Unreleased] — 2.2.0
+## [2.2.0] — 2026-07-11
 
 ### Added
 - **429/503/504 backoff.** Throttled and transient Graph responses are retried with

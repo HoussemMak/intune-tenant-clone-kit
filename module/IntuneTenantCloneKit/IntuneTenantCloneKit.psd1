@@ -1,6 +1,6 @@
 @{
     RootModule           = 'IntuneTenantCloneKit.psm1'
-    ModuleVersion        = '2.1.0'
+    ModuleVersion        = '2.2.0'
     GUID                 = '2dfaf5e5-83c3-4d11-97b5-edc8c1a1bd89'
     Author               = 'Houmak'
     CompanyName          = 'Minerva IA'
@@ -39,6 +39,18 @@
             LicenseUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/HoussemMak/intune-tenant-clone-kit'
             ReleaseNotes = @'
+2.2.0  (resilience, honest verification, coverage & docs)
+- 429/503/504 backoff: throttled/transient Graph responses are retried (Retry-After + exponential
+  backoff) across export, import, assignments and the unattended orchestrator.
+- Honest verification: the orchestrator no longer compares counts (target >= source); it uses each
+  wave's reconcile.json as the source of truth and paginates backup/verify (no ?$top=999 truncation).
+- AppIdMap in -Phase All: a single -Phase All import auto-builds the source->target app id map after
+  the Apps wave; an unmapped app is SKIP_UNMAPPED (never a source app GUID POSTed into the target).
+- Module exit codes preserved: Test-IntuneExport / Compare-IntuneExport return a usable non-zero code
+  (the build turns a top-level 'exit N' into 'return N'; a module cmdlet never exits the host).
+- Docs refreshed across en/ and fr/ (reconciliation, fail-closed security, AI assistant, honest
+  positioning), new architecture/product images, and a CHANGELOG.
+
 2.1.0  (reconciliation report)
 - Import-IntuneConfiguration now emits an object-by-object reconciliation report next to the CSV log:
   reconcile.json (versioned, backend-neutral schema), reconcile.html (per-family tables + a
