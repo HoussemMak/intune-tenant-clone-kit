@@ -38,11 +38,18 @@ Cycle complet **export → correction → import**.
 
 ## Couverture
 
-| ✅ Automatisé | ⏸️ Manuel (limites Intune) |
+| ✅ Automatisé (réimporté) | ⏸️ Manuel |
 |---|---|
-| Settings Catalog, Profils de configuration, Conformité, Scripts, Remédiations, Filtres, Scope tags, Apps Store, App Config, App Protection, Autopilot, Notifications, Groupes + affectations, Windows Update (anneaux + profils Feature/Quality/Driver), Termes & conditions, Catégories d'appareils, rôles RBAC personnalisés, Conditional Access (créée désactivée) | Secrets (Wi-Fi/PSK, AppLocker/WDAC, OMA chiffré), Apps LOB/Win32/VPP (binaires), Admin Templates, Endpoint Security (intents), Enrollment, **Device Inventory policies** |
+| Settings Catalog, Profils de configuration, Conformité, Scripts, Remédiations, Filtres, Scope tags, Apps Store, App Config, App Protection, Autopilot, Notifications, Groupes + affectations, Windows Update (anneaux + profils Feature/Quality/Driver), Termes & conditions, Catégories d'appareils, rôles RBAC personnalisés, Conditional Access (créée désactivée) | **Non exportés :** Secrets (Wi-Fi/PSK, AppLocker/WDAC, OMA chiffré), Apps LOB/Win32/VPP (binaires), Device Inventory policies. **Exportés mais NON réimportés :** Admin Templates, Endpoint Security (intents), Enrollment. |
 
 > 📌 Liste complète de ce qui n'est **pas** cloné (et comment gérer chaque élément) : [`LIMITATIONS.md`](LIMITATIONS.md).
+>
+> ℹ️ **Admin Templates (`14_`), Endpoint Security intents (`15_`) et Enrollment (`16_`) sont _exportés_ mais
+> **ne figurent pas** dans le catalogue d'import** — le moteur d'import ne les recrée jamais ; à recréer
+> manuellement dans la cible. Le **rapport de réconciliation** liste chacun de ces objets en **`OutOfScope`**
+> (comptabilisés, jamais abandonnés en silence) ; un objet Endpoint Security OutOfScope — ou tout objet dont
+> le nom contient *baseline* — lève en plus la bannière **sécurité-critique** (code de sortie de
+> réconciliation non nul en mode `-Execute`).
 
 ## Prérequis
 

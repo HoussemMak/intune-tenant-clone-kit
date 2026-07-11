@@ -11,7 +11,8 @@
 
     Transformations applied while wrapping:
       - drop the top-level '#Requires' line (PowerShellVersion lives in the manifest);
-      - turn any top-level 'exit N' into 'return' (a module function must not kill the host).
+      - turn any top-level 'exit N' into 'return N' (a module function must not kill the host,
+        but its return code must stay usable in CI).
 
 .EXAMPLE
     pwsh ./module/Build-Module.ps1
@@ -53,7 +54,7 @@ foreach ($rel in $map.Keys) {
 
     $out = foreach ($ln in (Get-Content -LiteralPath $path)) {
         if ($ln -match '^\s*#Requires')      { continue }
-        if ($ln -match '^(?<i>\s*)exit\b')   { "$($Matches.i)return"; continue }
+        if ($ln -match '^(?<i>\s*)exit\b(?<rest>.*)$') { "$($Matches.i)return$($Matches.rest)"; continue }
         $ln
     }
 

@@ -139,6 +139,7 @@ function Write-Warn2{ param([string]$T) Write-Host ("[WARN] {0}" -f $T) -Foregro
 function Write-Bad  { param([string]$T) Write-Host ("[ERR]  {0}" -f $T) -ForegroundColor Red }
 
 $script:StepRows = New-Object System.Collections.Generic.List[object]
+$script:ReconSnapshots = New-Object System.Collections.Generic.List[string]   # P1-2: instantanes reconcile.json par vague (source de verite de la verification)
 function Add-StepResult { param([string]$Step,[string]$Status,[string]$LogPath,[string]$Details)
     $script:StepRows.Add([pscustomobject]@{
         DateUtc=(Get-Date).ToUniversalTime().ToString('s')+'Z'; Step=$Step; Status=$Status; LogPath=$LogPath; Details=$Details }) | Out-Null }
@@ -218,9 +219,72 @@ function Connect-Tenant {
     if (-not $ctx -or -not $ctx.TenantId) { throw "Connexion Graph $Label invalide." }
     if ($ctx.TenantId.ToLowerInvariant() -ne $TenantId.ToLowerInvariant()) {
         throw "Connexion $Label sur mauvais tenant. Attendu=$TenantId ; connecte=$($ctx.TenantId)" }
-    $org = $null; try { $org = (Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/organization').value | Select-Object -First 1 } catch {}
+    $org = $null; try { $org = (Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/organization' }).value | Select-Object -First 1 } catch {}
     $acct = if ($ctx.Account) { $ctx.Account } else { 'app-only' }
     Write-Ok ("{0} : {1} (Tenant {2}, {3})" -f $Label, $org.displayName, $ctx.TenantId, $acct)
+}
+
+# --------------------------------------------------------------------------
+# Resilience Graph : backoff 429/503/504 + pagination complete + aides identite
+# --------------------------------------------------------------------------
+function Invoke-GraphWithRetry {
+    # P1-3 : rejoue un appel Graph sur limitation transitoire (429) ou erreur passerelle (503/504). Respecte
+    # Retry-After si expose, sinon backoff exponentiel plafonne a 60s + jitter. Un 429 transitoire ne produit plus Failed/ERROR.
+    param([Parameter(Mandatory)][scriptblock]$Call,[int]$MaxAttempts=5)
+    for ($i=1;;$i++) {
+        try { return & $Call }
+        catch {
+            $code = 0
+            try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+            if ($code -eq 0) { try { $code = [int]$_.Exception.StatusCode } catch {} }
+            if ($code -eq 0) {
+                $msg = "$($_.Exception.Message)"
+                if ($msg -match '\b(429|503|504)\b') { $code = [int]$Matches[1] }
+                elseif ($msg -match '(?i)too many requests|throttl|temporarily unavailable') { $code = 429 }
+            }
+            if ($code -in 429,503,504 -and $i -lt $MaxAttempts) {
+                $ra = 0
+                try { $ra = [int]$_.Exception.Response.Headers.RetryAfter.Delta.TotalSeconds } catch {}
+                if ($ra -le 0) { $ra = [int][Math]::Min([Math]::Pow(2,$i),60) }
+                Write-Warn2 ("Limitation Graph (HTTP {0}) : tentative {1}/{2}, attente {3}s." -f $code,$i,$MaxAttempts,$ra)
+                Start-Sleep -Seconds ([int]$ra + (Get-Random -Minimum 0 -Maximum 2))
+                continue
+            }
+            throw
+        }
+    }
+}
+
+function Get-GraphAllPages {
+    # P1-2 : suit @odata.nextLink pour retourner TOUS les objets (backup/verif ne doivent jamais tronquer au-dela de 999).
+    param([Parameter(Mandatory)][string]$Uri)
+    $all = New-Object System.Collections.Generic.List[object]
+    $next = $Uri
+    while ($next) {
+        $resp = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri $next }
+        foreach ($it in @($resp.value)) { [void]$all.Add($it) }
+        $next = $resp.'@odata.nextLink'
+    }
+    return $all.ToArray()   # deroule volontairement : chaque appelant recollecte avec @(...)
+}
+
+function Get-VerifyName {
+    # Identite lisible d'un objet Intune (displayName, sinon name).
+    param($Obj)
+    foreach ($p in 'displayName','name') { $v = $Obj.$p; if ($v) { return [string]$v } }
+    return '(sans nom)'
+}
+function Get-VerifyKey {
+    # Cle d'identite normalisee pour croiser la presence SOURCE vs CIBLE.
+    param($Obj)
+    foreach ($p in 'displayName','name') { $v = $Obj.$p; if ($v) { return ([string]$v).Trim().ToLowerInvariant() } }
+    return $null
+}
+function Test-CriticalRecord {
+    # Reprend l'heuristique du moteur : Conformite / Acces conditionnel / Endpoint Security / baselines de securite.
+    param($Rec)
+    $fam = [string]$Rec.family; $sn = [string]$Rec.sourceName; $an = [string]$Rec.appliedName
+    return ($fam -match '(?i)Compliance|ConditionalAccess|EndpointSecurity|Baseline' -or $sn -like '*aseline*' -or $an -like '*aseline*')
 }
 
 # --------------------------------------------------------------------------
@@ -303,7 +367,7 @@ function Invoke-Backup {
         Ensure-Folder $BackupDir
         foreach ($e in @('deviceManagement/deviceConfigurations','deviceManagement/configurationPolicies','deviceManagement/deviceCompliancePolicies','deviceManagement/deviceManagementScripts','deviceManagement/deviceHealthScripts','deviceManagement/roleScopeTags','deviceManagement/assignmentFilters','deviceAppManagement/mobileApps','deviceAppManagement/mobileAppConfigurations','deviceAppManagement/managedAppPolicies')) {
             try {
-                $v = (Invoke-MgGraphRequest -Method GET -Uri ("https://graph.microsoft.com/beta/{0}?`$top=999" -f $e)).value
+                $v = @(Get-GraphAllPages -Uri ("https://graph.microsoft.com/beta/{0}?`$top=999" -f $e))
                 ($v | ConvertTo-Json -Depth 100) | Set-Content (Join-Path $BackupDir ("{0}.json" -f ($e -replace '/','_'))) -Encoding UTF8
             } catch { Write-Warn2 ("Sauvegarde {0} : {1}" -f $e, $_.Exception.Message) }
         }
@@ -341,11 +405,18 @@ function Invoke-Preflight {
 function Invoke-Wave {
     param([string]$Phase,[string]$LogName)
     $log = Join-Path $LogsDir $LogName
+    $recon = Join-Path $LogsDir 'reconcile.json'
     $extra = @{}; if ($IncludeScopeTags) { $extra['IncludeScopeTags'] = $true }
     if (-not $Preview) { $extra['Execute'] = $true }
+    Remove-Item -LiteralPath $recon -Force -ErrorAction SilentlyContinue   # evite d'instantaner un reconcile perime (preflight/vague precedente)
     Invoke-Step -Name ("Etape 5 - Import vague : {0}{1}" -f $Phase, $(if($Preview){' (PREVIEW)'}else{''})) -LogPath $log -Action {
         Connect-Tenant -TenantId $TargetTenantId -Label 'CIBLE'
         & $Engine -SourcePath $script:ActiveSource -TargetTenantId $TargetTenantId -SourceTenantId $SourceTenantId -Phase $Phase -AppIdMapPath (Join-Path $LogsDir 'AppIdMap.csv') -LogPath $log @extra }
+    if (Test-Path -LiteralPath $recon) {   # P1-2 : conserve le reconcile.json de CETTE vague comme source de verite de la verification
+        $snap = Join-Path $LogsDir ("reconcile_{0}.json" -f $Phase)
+        Copy-Item -LiteralPath $recon -Destination $snap -Force
+        if (-not $script:ReconSnapshots.Contains($snap)) { $script:ReconSnapshots.Add($snap) | Out-Null }
+    }
     $err = Get-StatusCount -CsvPath $log -Status 'ERROR'
     if ($err -gt 0 -and $StopOnImportErrors) { throw "Import $Phase : $err erreur(s) et -StopOnImportErrors actif." }
 }
@@ -373,21 +444,72 @@ function Invoke-Assignments {
 function Invoke-Verification {
     if ($SkipVerification) { Write-Warn2 'Verification finale ignoree.'; return }
     $log = Join-Path $LogsDir '11_verification.csv'
-    Invoke-Step -Name 'Etape 7 - Verification finale SOURCE vs CIBLE' -LogPath $log -Action {
+    Invoke-Step -Name 'Etape 7 - Verification finale SOURCE vs CIBLE (identite/resultat)' -LogPath $log -Action {
         $rows = @()
-        function Count-Endpoints { param([string]$TenantId,[string]$Label)
-            Connect-Tenant -TenantId $TenantId -Label $Label -Scopes @('DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All','DeviceManagementServiceConfig.Read.All')
-            $h = @{}
-            foreach ($e in $VerifyEndpoints) {
-                try { $h[$e] = @((Invoke-MgGraphRequest -Method GET -Uri ("https://graph.microsoft.com/beta/{0}?`$top=999" -f $e)).value).Count }
-                catch { $h[$e] = -1 }
+        # Source de verite privilegiee : instantanes reconcile.json par vague (P1-1). Base sur le RESULTAT, jamais
+        # sur des comptes naifs (un objet preexistant cible ne peut masquer un import manque ; Failed/Skipped/OutOfScope nommes).
+        $snaps = @($script:ReconSnapshots | Where-Object { Test-Path -LiteralPath $_ })
+        if ($snaps.Count -gt 0) {
+            $agg = [ordered]@{ Matched=0; Created=0; Failed=0; Skipped=0; Preview=0; OutOfScope=0 }
+            $critLines = @()
+            $gapRows = New-Object System.Collections.Generic.List[object]
+            foreach ($f in $snaps) {
+                $doc = $null; try { $doc = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json } catch {}
+                if ($null -eq $doc) { continue }
+                $phase = [string]$doc.phase
+                foreach ($o in @('Matched','Created','Failed','Skipped','Preview','OutOfScope')) {
+                    $val = 0; try { $val = [int]$doc.summary.$o } catch {}; $agg[$o] += $val
+                }
+                $recs    = @($doc.records)
+                # Une CA creee DESACTIVEE (reason 'manual-enable-required') n'est PAS un clone abouti -> ecart, pas applique.
+                $gaps    = @($recs | Where-Object { ($_.outcome -in @('Failed','Skipped','OutOfScope')) -or ($_.reason -match 'manual-enable-required') })
+                $applied = @($recs | Where-Object { ($_.outcome -in @('Matched','Created')) -and ($_.reason -notmatch 'manual-enable-required') }).Count
+                $missing = (@($gaps | ForEach-Object { $_.sourceName }) -join '; ')
+                $rows += [pscustomobject]@{ Endpoint=("Phase: {0}" -f $phase); Source=$recs.Count; Cible=$applied; Missing=$missing; Status=$(if($gaps.Count -eq 0){'OK'}else{'ECART'}) }
+                foreach ($g in $gaps) {
+                    $crit = Test-CriticalRecord $g
+                    $gapRows.Add([pscustomobject]@{ Endpoint=("{0} / {1}" -f $phase,$g.family); Source=$g.sourceName; Cible=$g.outcome; Missing=$g.reason; Status=$(if($crit){'CRITICAL'}else{'GAP'}) }) | Out-Null
+                    if ($crit) { $critLines += ("{0} | {1} -> {2} ({3})" -f $g.family,$g.sourceName,$g.outcome,$g.reason) }
+                }
             }
-            return $h
-        }
-        $src = Count-Endpoints -TenantId $SourceTenantId -Label 'SOURCE (verif)'
-        $tgt = Count-Endpoints -TenantId $TargetTenantId -Label 'CIBLE (verif)'
-        foreach ($e in $VerifyEndpoints) {
-            $rows += [pscustomobject]@{ Endpoint=$e; Source=$src[$e]; Cible=$tgt[$e]; Status=$(if($tgt[$e] -ge $src[$e] -and $src[$e] -ge 0){'OK'}else{'ECART'}) }
+            foreach ($gr in $gapRows) { $rows += $gr }
+            Write-Info ("Reconcile (verite import) : Matched={0} Created={1} Failed={2} Skipped={3} Preview={4} OutOfScope={5}" -f $agg.Matched,$agg.Created,$agg.Failed,$agg.Skipped,$agg.Preview,$agg.OutOfScope)
+            if ($critLines.Count -gt 0) {
+                Write-Bad ("SECURITE-CRITIQUE non applique ({0}) :" -f $critLines.Count)
+                foreach ($l in $critLines) { Write-Bad ("  [!] {0}" -f $l) }
+            } elseif (($agg.Failed + $agg.Skipped + $agg.OutOfScope) -gt 0) {
+                Write-Warn2 ("Ecarts a examiner (Failed/Skipped/OutOfScope) : {0}" -f ($agg.Failed + $agg.Skipped + $agg.OutOfScope))
+            }
+        } else {
+            # Repli (aucun reconcile.json produit) : croiser SOURCE vs CIBLE par cle d'IDENTITE (nom). Un objet
+            # preexistant cible ne peut masquer un import manque : chaque cle source sans correspondance est nommee (ECART).
+            function Read-EndpointObjects { param([string]$TenantId,[string]$Label)
+                Connect-Tenant -TenantId $TenantId -Label $Label -Scopes @('DeviceManagementConfiguration.Read.All','DeviceManagementApps.Read.All','DeviceManagementServiceConfig.Read.All')
+                $h = @{}
+                foreach ($e in $VerifyEndpoints) {
+                    try { $h[$e] = @(Get-GraphAllPages -Uri ("https://graph.microsoft.com/beta/{0}?`$top=999" -f $e)) }
+                    catch { $h[$e] = $null }
+                }
+                return $h
+            }
+            $srcMap = Read-EndpointObjects -TenantId $SourceTenantId -Label 'SOURCE (verif)'
+            $tgtMap = Read-EndpointObjects -TenantId $TargetTenantId -Label 'CIBLE (verif)'
+            foreach ($e in $VerifyEndpoints) {
+                $srcObjs = $srcMap[$e]; $tgtObjs = $tgtMap[$e]
+                if ($null -eq $srcObjs -or $null -eq $tgtObjs) {
+                    $rows += [pscustomobject]@{ Endpoint=$e; Source=$(if($null -eq $srcObjs){'ERR'}else{@($srcObjs).Count}); Cible=$(if($null -eq $tgtObjs){'ERR'}else{@($tgtObjs).Count}); Missing='erreur de lecture'; Status='ERROR-READ' }
+                    continue
+                }
+                $tgtKeys = @{}
+                foreach ($o in $tgtObjs) { $k = Get-VerifyKey $o; if ($k) { $tgtKeys[$k] = $true } }
+                $missing = New-Object System.Collections.Generic.List[string]
+                foreach ($o in $srcObjs) {
+                    $k = Get-VerifyKey $o
+                    if ($k -and -not $tgtKeys.ContainsKey($k)) { $missing.Add((Get-VerifyName $o)) | Out-Null }
+                }
+                $rows += [pscustomobject]@{ Endpoint=$e; Source=@($srcObjs).Count; Cible=@($tgtObjs).Count; Missing=($missing -join '; '); Status=$(if($missing.Count -eq 0){'OK'}else{'ECART'}) }
+                if ($missing.Count -gt 0) { Write-Warn2 ("{0} : {1} objet(s) source absent(s) de la cible -> {2}" -f $e,$missing.Count,($missing -join '; ')) }
+            }
         }
         $rows | Export-Csv -LiteralPath $log -NoTypeInformation -Encoding UTF8
         $rows | Format-Table -Auto | Out-Host
@@ -439,10 +561,12 @@ function New-FinalReport {
     $verifyLog = Join-Path $LogsDir '11_verification.csv'
     if (Test-Path -LiteralPath $verifyLog) {
         $verifyHtml = (@(Import-Csv -LiteralPath $verifyLog) | ForEach-Object {
-            '<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td></tr>' -f (HtmlEnc $_.Endpoint), (HtmlEnc $_.Source), (HtmlEnc $_.Cible), (HtmlEnc $_.Status) }) -join "`n"
+            $st = [string]$_.Status
+            $cls = if ($st -eq 'OK') { 'ok' } elseif ($st -like 'SKIP*') { 'skipped' } else { 'error' }
+            '<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td><td><span class="badge {4}">{5}</span></td></tr>' -f (HtmlEnc $_.Endpoint), (HtmlEnc $_.Source), (HtmlEnc $_.Cible), (HtmlEnc $_.Missing), $cls, (HtmlEnc $st) }) -join "`n"
     }
     $verifySection = if ($verifyHtml) {
-        "<section class='card'><h2>Verification SOURCE vs CIBLE</h2><table><thead><tr><th>Endpoint</th><th>Source</th><th>Cible</th><th>Statut</th></tr></thead><tbody>$verifyHtml</tbody></table></section>"
+        "<section class='card'><h2>Verification SOURCE vs CIBLE (identite/resultat)</h2><table><thead><tr><th>Portee</th><th>Source</th><th>Cible</th><th>Manquant / ecart</th><th>Statut</th></tr></thead><tbody>$verifyHtml</tbody></table></section>"
     } else { '' }
 
     $mode = if ($Preview) { 'PREVIEW (aucune ecriture)' } else { 'EXECUTION' }

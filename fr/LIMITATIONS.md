@@ -14,9 +14,22 @@ Graph / Intune, soit parce qu'ils portent des données non transférables entre 
 | **Device Inventory policies** (la nouvelle configuration *« collecte d'inventaire »* / properties catalog) | Ces politiques **ne sont pas renvoyées par les endpoints de configuration `deviceManagement` standards** énumérés par le kit, et **ne sont pas exportables avec un token Microsoft Graph classique** — le portail Intune utilise un token séparé/interne pour elles. | Recréer manuellement — ou `Invoke-IntunePortalCaptureToScript.ps1` transforme une capture portail en script de recréation rédigé par l'IA. |
 | **Secrets chiffrés** (Wi-Fi/PSK, VPN, OMA-URI personnalisé avec `secretReferenceValueId`, blobs AppLocker/WDAC) | Intune n'exporte jamais une valeur secrète en clair ; le pointeur de référence est propre au tenant. | `Recover-IntuneOmaSecrets.ps1` (ou `-RecoverSecrets` de l'orchestrateur) récupère le clair depuis la source et le ré-injecte — sans re-saisie (droits de lecture source requis) ; sinon recréer et re-saisir le secret. |
 | **Apps LOB / Win32 / VPP** | Le binaire d'installation (`.intunewin`, package, token VPP) ne fait pas partie des métadonnées JSON exportées. | Fournir le binaire ; `Publish-IntuneApp.ps1` (expérimental) orchestre l'upload Win32 `.intunewin`, puis remapper les affectations. |
-| **Modèles d'administration (ADMX)** | Non gérés par le moteur Settings Catalog. | Recréer au portail (ou migrer vers le Settings Catalog). |
-| **Endpoint Security (intents)** | Le modèle de templates `intents` n'est pas couvert. | Recréer au portail. |
-| **Configurations d'inscription (Enrollment)** | Restrictions / pages de statut d'inscription propres au tenant. | Recréer au portail. |
+
+## Exportés, mais NON réimportés automatiquement (réimport manuel)
+
+Les familles ci-dessous **sont bien capturées par l'export**, mais **ne figurent pas dans le catalogue
+d'import** (`$Catalog`) : le moteur d'import ne les recrée donc jamais — à recréer à la main dans le tenant
+cible. Elles ne sont **pas** « absentes » de votre export : le **rapport de réconciliation**
+(`reconcile.json` / `.html` / `.csv`) liste chacun de ces objets avec l'issue **`OutOfScope`** (comptabilisés,
+jamais abandonnés en silence). Un objet **Endpoint Security** OutOfScope — ou tout objet dont le nom contient
+*baseline* — lève en plus la bannière **SÉCURITÉ-CRITIQUE** et, en mode `-Execute`, force un code de sortie de
+réconciliation non nul : une politique critique n'est jamais confondue avec un « tout va bien ».
+
+| Type d'objet | Dossier d'export | Pourquoi non réimporté | Que faire |
+|---|---|---|---|
+| **Modèles d'administration (ADMX)** | `14_AdminTemplates` | Non gérés par le moteur d'import Settings Catalog ; absents du catalogue d'import. | Recréer au portail (ou migrer vers le Settings Catalog). |
+| **Endpoint Security (intents / baselines)** | `15_EndpointSecurity` | Le modèle de templates `intents` n'est pas couvert par le moteur d'import ; absent du catalogue d'import. | Recréer au portail. Listé `OutOfScope` ; les baselines sont en plus signalées sécurité-critique. |
+| **Configurations d'inscription (Enrollment)** | `16_Enrollment` | Restrictions / pages de statut d'inscription propres au tenant ; absentes du catalogue d'import. | Recréer au portail. |
 
 ## Autres types de configuration non clonés
 

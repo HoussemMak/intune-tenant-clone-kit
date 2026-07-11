@@ -38,11 +38,17 @@ Full **export → correct → import** cycle.
 
 ## Coverage
 
-| ✅ Automated | ⏸️ Manual (Intune limits) |
+| ✅ Automated (re-imported) | ⏸️ Manual |
 |---|---|
-| Settings Catalog, configuration profiles, compliance, scripts, remediations, filters, scope tags, Store apps, app config, app protection, Autopilot, notifications, groups + assignments, Windows Update (rings + Feature/Quality/Driver profiles), Terms & Conditions, Device categories, custom RBAC roles, Conditional Access (created disabled) | Secrets (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA), LOB/Win32/VPP apps (binaries), Admin Templates, Endpoint Security (intents), Enrollment, **Device Inventory policies** |
+| Settings Catalog, configuration profiles, compliance, scripts, remediations, filters, scope tags, Store apps, app config, app protection, Autopilot, notifications, groups + assignments, Windows Update (rings + Feature/Quality/Driver profiles), Terms & Conditions, Device categories, custom RBAC roles, Conditional Access (created disabled) | **Not exported:** Secrets (Wi-Fi/PSK, AppLocker/WDAC, encrypted OMA), LOB/Win32/VPP apps (binaries), Device Inventory policies. **Exported but NOT re-imported:** Admin Templates, Endpoint Security (intents), Enrollment. |
 
 > 📌 Full list of what is **not** cloned (and how to handle each item): [`LIMITATIONS.md`](LIMITATIONS.md).
+>
+> ℹ️ **Admin Templates (`14_`), Endpoint Security intents (`15_`) and Enrollment (`16_`) are _exported_ but
+> are **not** in the import catalog** — the import engine never re-creates them, so recreate them manually in
+> the target. The **reconciliation report** lists every such object as **`OutOfScope`** (counted, never
+> silently dropped); an OutOfScope Endpoint Security object — or any object whose name contains *baseline* —
+> additionally raises the **security-critical** banner (non-zero reconciliation exit code under `-Execute`).
 
 ## Prerequisites
 

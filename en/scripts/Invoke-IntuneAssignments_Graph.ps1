@@ -111,6 +111,35 @@ function Add-Log {
     }) | Out-Null
 }
 
+# --- P1-3 : retry/backoff on transient throttling (HTTP 429) and gateway errors (503/504) ---
+# A transient 429/503/504 on ANY Graph call (pagination, POST /groups, POST /assign) must be
+# replayed, not surfaced as a Failed/ERROR. Honors Retry-After when present, else exponential
+# backoff (cap 60s) + jitter. Any non-throttling error is re-thrown unchanged, so the fail-closed
+# logic (P0-2/P0-6) is untouched.
+function Invoke-GraphWithRetry {
+    param([Parameter(Mandatory=$true)][scriptblock]$Call,[int]$MaxAttempts=5)
+    for ($i=1;;$i++) {
+        try { return & $Call }
+        catch {
+            $ex = $_.Exception
+            # Detect the HTTP status across the possible exception shapes of Invoke-MgGraphRequest.
+            $code = 0
+            try { if ($ex.Response -and $ex.Response.StatusCode) { $code = [int]$ex.Response.StatusCode } } catch {}
+            if ($code -eq 0) { try { if ($ex.StatusCode) { $code = [int]$ex.StatusCode } } catch {} }
+            if ($code -eq 0 -and $_.ErrorDetails -and $_.ErrorDetails.Message -match '\b(429|503|504)\b') { $code = [int]$Matches[1] }
+            if ($code -eq 0 -and $ex.Message -match '\b(429|503|504)\b') { $code = [int]$Matches[1] }
+            if ($code -in 429,503,504 -and $i -lt $MaxAttempts) {
+                $ra = 0
+                try { if ($ex.Response -and $ex.Response.Headers.RetryAfter.Delta) { $ra = [int]$ex.Response.Headers.RetryAfter.Delta.TotalSeconds } } catch {}
+                if ($ra -le 0) { $ra = [int][Math]::Min([Math]::Pow(2,$i),60) }
+                Start-Sleep -Seconds ([int]$ra + (Get-Random -Minimum 0 -Maximum 2))
+                continue
+            }
+            throw
+        }
+    }
+}
+
 # --- App-only certificate connection via INTUNE_AUTO_* variables (identical to the rest of the kit) ---
 function Connect-GraphForIntuneAutomation {
     param([Parameter(Mandatory=$true)][string]$TenantId,[string[]]$Scopes)
@@ -152,14 +181,14 @@ function Connect-GraphForIntuneAutomation {
 }
 
 function Get-TenantDisplay {
-    try { return ((Invoke-MgGraphRequest -Method GET -Uri "$GraphBase/organization").value | Select-Object -First 1) } catch { return $null }
+    try { return ((Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri "$GraphBase/organization" }).value | Select-Object -First 1) } catch { return $null }
 }
 
 function Get-All {
     param([Parameter(Mandatory=$true)][string]$RelPath)
     $all = @(); $u = "$GraphBase/$RelPath"
     do {
-        $r = Invoke-MgGraphRequest -Method GET -Uri $u
+        $r = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri $u }
         if     ($r.value) { $all += @($r.value) }
         elseif ($r.id)    { $all += $r }
         $u = $r.'@odata.nextLink'
@@ -277,7 +306,7 @@ function Invoke-ExportPhase {
     $props = 'id,displayName,mailNickname,description,groupTypes,membershipRule,membershipRuleProcessingState,securityEnabled,mailEnabled'
     foreach ($gid in $groupIds) {
         try {
-            $g = Invoke-MgGraphRequest -Method GET -Uri ("{0}/groups/{1}?`$select={2}" -f $GraphBase, $gid, $props)
+            $g = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri ("{0}/groups/{1}?`$select={2}" -f $GraphBase, $gid, $props) }
             $groupsCatalog += [pscustomobject]@{
                 oldId=$g.id; displayName=$g.displayName; mailNickname=$g.mailNickname; description=$g.description
                 groupTypes=@($g.groupTypes); membershipRule=$g.membershipRule
@@ -376,7 +405,7 @@ function Invoke-GroupsPhase {
         } else { $body.groupTypes = @() }
         $json = ($body | ConvertTo-Json -Depth 10)
         try {
-            $created = Invoke-MgGraphRequest -Method POST -Uri "$GraphBase/groups" -Body $json -ContentType 'application/json'
+            $created = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method POST -Uri "$GraphBase/groups" -Body $json -ContentType 'application/json' }
             $p.newId = $created.id; $p.Status = 'CREATED'
             Add-Log 'Groups' $p.displayName 'CREATED' ''
             Write-Ok ("+ group {0}" -f $p.displayName)
@@ -555,7 +584,7 @@ function Invoke-AssignPhase {
             }
             $json = (@{ assignments = $newAssignments } | ConvertTo-Json -Depth 40)
             try {
-                $null = Invoke-MgGraphRequest -Method POST -Uri ("{0}/{1}/{2}/assign" -f $GraphBase, $path, $targetId) -Body $json -ContentType 'application/json'
+                $null = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method POST -Uri ("{0}/{1}/{2}/assign" -f $GraphBase, $path, $targetId) -Body $json -ContentType 'application/json' }
                 Add-Log $famName $rec.ObjectName 'APPLIED' ("{0} assignment(s)" -f $newAssignments.Count)
                 Write-Ok ("+ {0} ({1} assignment(s))" -f $rec.ObjectName, $newAssignments.Count)
             } catch {

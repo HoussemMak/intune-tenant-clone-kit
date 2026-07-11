@@ -63,6 +63,39 @@ $script:SourceSeenCount = 0        # P1-1: count of SOURCE objects actually iter
 $script:ReconExitCode   = 0        # P1-1: 2 => security-critical NOT applied (set at the very end, -Execute only)
 $script:RemapLog        = $null    # P1-1: per-object old->new id remap trail (reset in the file loop)
 
+function Invoke-GraphWithRetry {
+    # P1-3: transient retry on throttling / server errors (429/503/504). A transient 429 must NOT
+    # surface as an ERROR/Failed. HTTP-code detection is defensive (Invoke-MgGraphRequest raises
+    # different exception shapes across module versions) with a message-based fallback.
+    param([Parameter(Mandatory)][scriptblock]$Call,[int]$MaxAttempts=5)
+    for ($i=1;;$i++) {
+        try { return & $Call }
+        catch {
+            $ex = $_.Exception
+            $code = 0
+            # a) classic HttpResponseMessage.StatusCode
+            try { if ($ex.Response -and $ex.Response.StatusCode) { $code = [int]$ex.Response.StatusCode } } catch {}
+            # b) some versions expose StatusCode directly on the exception
+            if ($code -eq 0) { try { if ($ex.StatusCode) { $code = [int]$ex.StatusCode } } catch {} }
+            # c) fallback: sniff the code / label out of the message
+            if ($code -eq 0) {
+                $msg = [string]$ex.Message
+                if     ($msg -match '(?i)\b429\b|too\s*many\s*requests|throttl') { $code = 429 }
+                elseif ($msg -match '(?i)\b503\b|service\s*unavailable')         { $code = 503 }
+                elseif ($msg -match '(?i)\b504\b|gateway\s*time-?out')           { $code = 504 }
+            }
+            if (($code -in 429,503,504) -and ($i -lt $MaxAttempts)) {
+                $ra = 0
+                try { if ($ex.Response.Headers.RetryAfter.Delta) { $ra = [int]$ex.Response.Headers.RetryAfter.Delta.TotalSeconds } } catch {}
+                if ($ra -le 0) { $ra = [int][Math]::Min([Math]::Pow(2,$i),60) }   # capped exponential backoff
+                Start-Sleep -Seconds ([int]$ra + (Get-Random -Minimum 0 -Maximum 2))
+                continue
+            }
+            throw
+        }
+    }
+}
+
 # SourceId -> TargetId app map (to remap targetedMobileApps in AppConfigurations).
 $script:AppIdMap = @{}
 if ($AppIdMapPath -and (Test-Path -LiteralPath $AppIdMapPath)) {
@@ -195,13 +228,43 @@ function Get-AllValues {
     param($Path)
     $all=@(); $u="$GraphBase/$Path"
     do {
-        $r = Invoke-MgGraphRequest -Method GET -Uri $u
+        $r = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri $u }
         if ($r.value) { $all += @($r.value) }
         $u = $r.'@odata.nextLink'
     } while ($u)
     # Stream the elements (defence in depth). The sole caller pipes "| ForEach-Object", so ",$all"
     # worked, but "return $all" removes any collapse risk if that call site ever changes.
     return $all
+}
+
+function Build-TargetAppIdMap {
+    # P1-4: in a single -Phase All run the AppIdMap is not supplied at the moment the AppConfigurations
+    # are imported. Build it HERE, AFTER the Apps wave and BEFORE the AppConfigurations, by querying the
+    # TARGET tenant (apps already created) and matching by displayName + @odata.type (name-only fallback)
+    # -- same logic as Build-IntuneAppIdMap.ps1. Feeds $script:AppIdMap (SourceId -> TargetId). Never
+    # overwrites entries already loaded from -AppIdMapPath.
+    $appsFolder = Join-Path $SourcePath '09_Apps'
+    if (-not (Test-Path -LiteralPath $appsFolder)) { return }
+    $srcFiles = @(Get-ChildItem -LiteralPath $appsFolder -Filter *.json -File -ErrorAction SilentlyContinue)
+    if ($srcFiles.Count -eq 0) { return }
+    try { $targetApps = @(Get-AllValues -Path 'deviceAppManagement/mobileApps') }
+    catch { Write-Host ("  [!] AppIdMap auto: cannot read target apps: {0}" -f $_.Exception.Message) -ForegroundColor Yellow; return }
+    $added = 0
+    foreach ($sf in $srcFiles) {
+        try { $src = Read-JsonFile $sf.FullName } catch { continue }
+        $sid = [string]$src.'id'; $sname = [string]$src.'displayName'; $stype = [string]$src.'@odata.type'
+        if (-not $sid -or -not $sname) { continue }
+        if ($script:AppIdMap.ContainsKey($sid)) { continue }   # never overwrite a -AppIdMapPath entry
+        $match = $null
+        $byNameType = @($targetApps | Where-Object { [string]$_.'displayName' -eq $sname -and [string]$_.'@odata.type' -eq $stype })
+        if ($byNameType.Count -eq 1) { $match = $byNameType[0] }
+        elseif ($byNameType.Count -eq 0) {
+            $byName = @($targetApps | Where-Object { [string]$_.'displayName' -eq $sname })
+            if ($byName.Count -eq 1) { $match = $byName[0] }
+        }
+        if ($match) { $script:AppIdMap[$sid] = [string]$match.'id'; $added++ }
+    }
+    Write-Host ("  [i] AppIdMap auto-built from target tenant: {0} match(es)." -f $added) -ForegroundColor DarkCyan
 }
 
 function Remove-TopKeys { param([hashtable]$H,[string[]]$Keys) foreach($k in $Keys){ if($H.ContainsKey($k)){ [void]$H.Remove($k) } } }
@@ -395,9 +458,10 @@ function Build-Payload {
             return (New-GenericPayload -O $O -Cat $Cat)
         }
         'AppConfig' {
-            # Remap targetedMobileApps (SOURCE app IDs -> target) via AppIdMap.csv; SKIP if unmapped
-            # (otherwise we would POST PROD app IDs that are invalid in the target tenant).
-            if ($AppIdMapPath -and $O.ContainsKey('targetedMobileApps') -and @($O['targetedMobileApps']).Count -gt 0) {
+            # Remap targetedMobileApps (SOURCE app IDs -> target) via AppIdMap; SKIP_UNMAPPED if unmapped
+            # (otherwise we would POST PROD app IDs that are invalid in the target tenant). The map comes
+            # from -AppIdMapPath OR is auto-built from the target tenant (P1-4, single -Phase All run).
+            if ($O.ContainsKey('targetedMobileApps') -and @($O['targetedMobileApps']).Count -gt 0) {   # P1-4: unconditional -> an unmapped app is SKIP_UNMAPPED, never a source GUID POSTed
                 $mapped = @()
                 foreach ($sid in @($O['targetedMobileApps'])) {
                     $tid = $script:AppIdMap[[string]$sid]
@@ -593,6 +657,11 @@ foreach ($cat in $selected) {
     Write-Host ""
     Write-Host ("--- {0} ({1} file(s)) ---" -f $cat.Folder,$files.Count) -ForegroundColor Cyan
 
+    # P1-4: right before the AppConfigurations, if no AppIdMap was supplied/loaded, build it from the
+    # TARGET tenant (apps created during the Apps wave of this same run) so configs whose target app
+    # exists import instead of a blanket SKIP_UNMAPPED.
+    if ($cat.Special -eq 'AppConfig' -and $script:AppIdMap.Count -eq 0) { Build-TargetAppIdMap }
+
     # Idempotence: existing key (name + type/platform discriminator) -> TARGET id in the target tenant.
     # P1-1: Dictionary key->targetId (was a HashSet) so a MATCHED source can PROVE the pre-existing target it maps to.
     $existingKeys = New-Object 'System.Collections.Generic.Dictionary[string,string]'
@@ -655,7 +724,7 @@ foreach ($cat in $selected) {
 
         try {
             $json = $payload | ConvertTo-Json -Depth 100
-            $created = Invoke-MgGraphRequest -Method POST -Uri "$GraphBase/$($cat.Path)" -Body $json -ContentType 'application/json'
+            $created = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method POST -Uri "$GraphBase/$($cat.Path)" -Body $json -ContentType 'application/json' }
             if ($cat.Special -eq 'ConditionalAccess') {
                 # Distinct outcome: a CA created DISABLED with remapped refs is NEVER a completed clone (manual enable required).
                 Add-Result $cat.Folder $name 'CREATED-DISABLED' 'Created-DISABLED / references-remapped / manual-enable-required' $created.id $null -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey -Remap $script:RemapLog
@@ -670,9 +739,9 @@ foreach ($cat in $selected) {
                 foreach ($m in @($obj['localizedNotificationMessages'])) {
                     $mm = [ordered]@{}; foreach($k in $m.Keys){ if($k -notin @('id','lastModifiedDateTime')){ $mm[$k]=$m[$k] } }
                     try {
-                        Invoke-MgGraphRequest -Method POST -ContentType 'application/json' `
+                        Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method POST -ContentType 'application/json' `
                           -Uri "$GraphBase/deviceManagement/notificationMessageTemplates/$($created.id)/localizedNotificationMessages" `
-                          -Body ($mm | ConvertTo-Json -Depth 20) | Out-Null
+                          -Body ($mm | ConvertTo-Json -Depth 20) } | Out-Null
                     } catch { Add-Result ($cat.Folder+'/msg') ("$name/$($m.locale)") 'ERROR' '' $created.id $_.Exception.Message }
                 }
             }
@@ -695,4 +764,6 @@ Write-Host ("CSV Log : {0}" -f $LogPath) -ForegroundColor Cyan
 
 # P1-1: reconciliation report (reconcile.json/html/csv) + SECURITY-CRITICAL gate. exit 2 only in -Execute.
 Write-Reconciliation
-if ($script:ReconExitCode -ne 0) { exit $script:ReconExitCode }
+if ($script:ReconExitCode -ne 0) {
+    exit $script:ReconExitCode   # standalone: non-zero exit. In the module build this line becomes 'return' (never exit the host).
+}

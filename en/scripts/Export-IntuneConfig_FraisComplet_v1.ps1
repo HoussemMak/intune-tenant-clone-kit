@@ -40,13 +40,42 @@ $B = 'https://graph.microsoft.com/beta'
 $warn = New-Object System.Collections.Generic.List[string]
 $counts = @()
 
+# --- P1-3: transient throttling retry (429/503/504) around Graph calls ---
+# A transient 429 on a large family must REPLAY instead of failing the family.
+# Export logic is unchanged: on success the call returns immediately (happy path untouched).
+function Invoke-GraphWithRetry {
+    param([Parameter(Mandatory)][scriptblock]$Call,[int]$MaxAttempts=5)
+    for ($i=1;;$i++) {
+        try { return & $Call }
+        catch {
+            $code = 0
+            try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+            if ($code -eq 0) {
+                # Fallback when the exception carries no HttpResponseMessage: read the status from the text.
+                $msg = [string]$_.Exception.Message
+                if     ($msg -match '\b429\b' -or $msg -match 'TooManyRequests|throttl') { $code = 429 }
+                elseif ($msg -match '\b503\b' -or $msg -match 'ServiceUnavailable')       { $code = 503 }
+                elseif ($msg -match '\b504\b' -or $msg -match 'GatewayTimeout')           { $code = 504 }
+            }
+            if ($code -in 429,503,504 -and $i -lt $MaxAttempts) {
+                $ra = 0
+                try { $ra = [int]$_.Exception.Response.Headers.RetryAfter.Delta.TotalSeconds } catch {}
+                if ($ra -le 0) { $ra = [int][Math]::Min([Math]::Pow(2,$i),60) }
+                Start-Sleep -Seconds ($ra + (Get-Random -Minimum 0 -Maximum 2))
+                continue
+            }
+            throw
+        }
+    }
+}
+
 # --- Safeguard: we must be connected to the SOURCE tenant (PROD) ---
 $ctx = Get-MgContext
 if (-not $ctx) { throw "No Graph connection. Run Connect-MgGraph -TenantId $SourceTenantId ... (PROD account) first." }
 if ($ctx.TenantId -ne $SourceTenantId) { throw "SAFEGUARD: current context $($ctx.TenantId) != expected source $SourceTenantId. Connect to the PROD tenant." }
 
 $org = $null
-try { $org = (Invoke-MgGraphRequest -Method GET -Uri "$B/organization").value | Select-Object -First 1 } catch {}
+try { $org = (Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri "$B/organization" }).value | Select-Object -First 1 } catch {}
 Write-Host ""
 Write-Host ("EXPORT from : {0}  (TenantId {1})" -f $org.displayName, $ctx.TenantId) -ForegroundColor Cyan
 Write-Host ("Account       : {0}" -f $ctx.Account) -ForegroundColor Cyan
@@ -59,7 +88,7 @@ function Get-All {
     param([string]$RelPath)
     $all = @(); $u = "$B/$RelPath"
     do {
-        $r = Invoke-MgGraphRequest -Method GET -Uri $u
+        $r = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri $u }
         if ($r.value) { $all += @($r.value) } elseif ($r.id) { $all += $r }
         $u = $r.'@odata.nextLink'
     } while ($u)
@@ -122,8 +151,8 @@ foreach ($cat in $fam) {
     foreach ($o in $items) {
         try {
             $obj = $o
-            if     ($cat.Item)     { $obj = Invoke-MgGraphRequest -Method GET -Uri "$B/$($cat.P)/$($o.id)" }
-            elseif ($cat.Expand)   { $obj = Invoke-MgGraphRequest -Method GET -Uri "$B/$($cat.P)/$($o.id)?`$expand=$($cat.Expand)" }
+            if     ($cat.Item)     { $obj = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri "$B/$($cat.P)/$($o.id)" } }
+            elseif ($cat.Expand)   { $obj = Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method GET -Uri "$B/$($cat.P)/$($o.id)?`$expand=$($cat.Expand)" } }
             elseif ($cat.Settings) { $obj = $o; $obj['settings'] = @(Get-All "$($cat.P)/$($o.id)/settings") }
 
             $name = [string]$obj.($cat.N)
