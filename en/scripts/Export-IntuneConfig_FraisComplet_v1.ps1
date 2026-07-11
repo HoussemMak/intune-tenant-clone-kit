@@ -35,8 +35,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $B = 'https://graph.microsoft.com/beta'
 # Known exclusions (NOT exported - see LIMITATIONS.md): Device Inventory policies (not exportable with a
-# standard Microsoft Graph token), ADMX Administrative Templates, Endpoint Security intents, Enrollment
-# configurations, encrypted secrets, and LOB/Win32/VPP app binaries.
+# standard Microsoft Graph token), encrypted secrets, and LOB/Win32/VPP app binaries.
+# Now exported (importable by the v3 engine): 14_AdminTemplates (ADMX) is REHYDRATED here via
+# $expand=definitionValues(definition,presentationValues(presentation)) so the import can recreate the
+# values by attribute-remap; 16_Enrollment is exported in full (the import creates only TARGETED profiles
+# ESP/limit/singlePlatformRestriction/notifications and SKIPS tenant defaults/singletons).
+# 15_EndpointSecurity is listed but SHALLOW: deviceManagement/intents is a Get-All without item settings,
+# and that API was FROZEN by Microsoft (~03/2025). Modern Endpoint Security is a configurationPolicy and
+# already flows through family 02; residual legacy intents are recreated manually / via AI-assist, not by API.
 $warn = New-Object System.Collections.Generic.List[string]
 $counts = @()
 
@@ -126,7 +132,7 @@ $fam = @(
   @{ F='11_AppProtection';         P='deviceAppManagement/managedAppPolicies';              N='displayName' }
   @{ F='12_AutopilotProfiles';     P='deviceManagement/windowsAutopilotDeploymentProfiles'; N='displayName' }
   @{ F='13_NotificationTemplates'; P='deviceManagement/notificationMessageTemplates';       N='displayName'; Expand='localizedNotificationMessages' }
-  @{ F='14_AdminTemplates';        P='deviceManagement/groupPolicyConfigurations';          N='displayName' }
+  @{ F='14_AdminTemplates';        P='deviceManagement/groupPolicyConfigurations';          N='displayName'; Expand='definitionValues($expand=definition,presentationValues($expand=presentation))' }
   @{ F='15_EndpointSecurity';      P='deviceManagement/intents';                            N='displayName' }
   @{ F='16_Enrollment';            P='deviceManagement/deviceEnrollmentConfigurations';     N='displayName' }
   @{ F='17_FeatureUpdateProfiles'; P='deviceManagement/windowsFeatureUpdateProfiles'; N='displayName' }

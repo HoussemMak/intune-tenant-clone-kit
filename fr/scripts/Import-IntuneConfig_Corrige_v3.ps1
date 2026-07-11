@@ -62,6 +62,12 @@ $script:SourceFileCount = 0        # P1-1 : compte independant des fichiers SOUR
 $script:SourceSeenCount = 0        # P1-1 : nombre d'objets SOURCE reellement parcourus (invariant de completude)
 $script:ReconExitCode   = 0        # P1-1 : 2 => securite-critique NON appliquee (pose tout a la fin, -Execute seulement)
 $script:RemapLog        = $null    # P1-1 : trace de remap old->new par objet (reinitialisee dans la boucle de fichiers)
+# 14_AdminTemplates (ADMX) — caches du catalogue CIBLE + stash par objet des definitionValues source.
+# Les definitionValues DOIVENT etre captures AVANT que Build-Payload ne les Strip (Remove-TopKeys mute $obj
+# en place) : New-AdminTemplatePayload les stashe ici pour le post-create / le dry-run PREVIEW.
+$script:AdmxDefCache    = $null    # dict : 'displayName|classType|categoryPath' (minuscule) -> id de groupPolicyDefinition CIBLE
+$script:AdmxPresCache   = @{}      # dict : id def CIBLE -> tableau des presentations CIBLE de cette definition
+$script:AdminDefValues  = @()      # stash par objet des definitionValues SOURCE (reinitialise dans la boucle de fichiers)
 
 function Invoke-GraphWithRetry {
     # P1-3 : retry transitoire sur throttling / erreurs serveur (429/503/504). Un 429 transitoire ne doit
@@ -175,7 +181,25 @@ $Catalog = @(
     @{ Folder='21_DeviceCategories';      Path='deviceManagement/deviceCategories';              Name='displayName'; Phase='Foundation'; Strip=@('id','exportWarnings') }
     @{ Folder='22_RoleDefinitions';       Path='deviceManagement/roleDefinitions';               Name='displayName'; Phase='Foundation'; Strip=@('id','createdDateTime','lastModifiedDateTime','exportWarnings'); Special='RoleDefinition' }
     @{ Folder='23_ConditionalAccess';    Path='identity/conditionalAccess/policies';               Name='displayName'; Phase='Policies';   Strip=@('id','createdDateTime','modifiedDateTime','templateId','exportWarnings'); Special='ConditionalAccess' }
+    @{ Folder='14_AdminTemplates';        Path='deviceManagement/groupPolicyConfigurations';          Name='displayName'; Phase='Policies';   Strip=@('id','createdDateTime','lastModifiedDateTime','definitionValues','policyConfigurationIngestionType','exportWarnings'); Special='AdminTemplate' }
+    @{ Folder='16_Enrollment';            Path='deviceManagement/deviceEnrollmentConfigurations';     Name='displayName'; Phase='Foundation'; Key='@odata.type'; Strip=@('id','priority','createdDateTime','lastModifiedDateTime','version','deviceEnrollmentConfigurationType','assignments','exportWarnings'); Special='Enrollment' }
 )
+
+# GARDE-FOU fail-closed (design : Endpoint Security). 15_EndpointSecurity ne doit JAMAIS etre cable dans
+# $Catalog : deviceManagement/intents (et l'API templates legacy) ont ete GELES par Microsoft (~03/2025).
+# L'Endpoint Security moderne est une configurationPolicy deja geree par la famille 02 ; les intents legacy
+# residuels se recreent a la main / via AI-assist, jamais par un importeur d'intents. Si quelqu'un en recable
+# un ici, refuser de tourner.
+if (@($Catalog | Where-Object { $_.Folder -eq '15_EndpointSecurity' }).Count -gt 0) {
+    throw "GARDE-FOU : 15_EndpointSecurity ne doit pas etre dans `$Catalog (deviceManagement/intents gele ; ES moderne = famille 02, intents legacy = manuel/AI-assist)."
+}
+
+# Surcharges de raison OutOfScope : pour les dossiers presents dans l'export mais volontairement absents du
+# $Catalog, donner une raison SPECIFIQUE et honnete au lieu du generique 'aucun endpoint'. 15_EndpointSecurity
+# est le cas notable.
+$script:OutOfScopeReasons = @{
+    '15_EndpointSecurity' = 'Endpoint Security intents legacy : API deviceManagement/intents gelee par Microsoft (~03/2025). L''ES moderne se recree via la famille 02 (configurationPolicies) ; les intents legacy = runbook manuel / AI-assist. Non recreable par API.'
+}
 
 function Add-Result {
     # Enregistrement enrichi P1-1. Les colonnes historiques (Timestamp/Family/Name/Status/Reason/GraphId/Error)
@@ -353,6 +377,128 @@ function New-ContentScriptPayload {
     New-GenericPayload -O $O -Cat $Cat
 }
 
+# ---- 16_Enrollment : skip-and-flag AVANT tout POST (fail-closed) ----------------------------------
+function New-EnrollmentPayload {
+    # deviceEnrollmentConfigurations : endpoint unique, sous-type porte par @odata.type dans le corps. L'export
+    # liste defauts + profils cibles sans filtre ; on classe ici. Seuls les profils CIBLES sont POSTes
+    # (ESP/limit/singlePlatformRestriction/notifications). Les defauts et singletons du tenant sont SKIP (un POST
+    # collisionnerait ou casserait la priorite). priority est en lecture seule au create -> strippee & journalisee,
+    # jamais reordonnee (setPriority remanierait aussi les profils deja presents dans la cible). assignments ->
+    # deferees a Invoke-IntuneAssignments (jamais de GUID de groupe source poste). @odata.type CONSERVE pour le routage.
+    param([hashtable]$O,$Cat)
+    $t   = [string]$O['@odata.type']
+    $ect = [string]$O['deviceEnrollmentConfigurationType']
+    $prio = $O['priority']
+    # priority est deserialisee en Int64 par ConvertFrom-Json -AsHashtable : un '-is [int]' litteral RATE 0 et
+    # ferait fail-OUVERT sur un defaut tenant. Garder le null d'abord (priority absente != 0), puis comparer en Int64.
+    $prioIsZero = $false
+    if ($null -ne $prio) { try { $prioIsZero = ([int64]$prio -eq 0) } catch { $prioIsZero = $false } }
+    $singletons = @(
+      '#microsoft.graph.deviceEnrollmentWindowsHelloForBusinessConfiguration',
+      '#microsoft.graph.deviceComanagementAuthorityConfiguration',
+      '#microsoft.graph.windowsRestoreDeviceEnrollmentConfiguration')
+    # 1) Defauts tenant / singletons : NE JAMAIS dupliquer.
+    if ($ect -like 'default*' -or $prioIsZero -or ($singletons -contains $t)) {
+        throw "SKIP_DEFAULT_SINGLETON : enrollment default/singleton ($ect/$t) -- collision cible ou casse la priorite."
+    }
+    # 2) Restriction multi-plateforme combinee legacy : revue manuelle (recreer/convertir en singlePlatformRestriction).
+    if ($t -eq '#microsoft.graph.deviceEnrollmentPlatformRestrictionsConfiguration') {
+        throw "SKIP_FLAG_REVIEW : platformRestrictions combinee legacy -- recreer/convertir en singlePlatformRestriction."
+    }
+    return (New-GenericPayload -O $O -Cat $Cat)   # strippe priority/id/... -> jamais de GUID source ; @odata.type conserve
+}
+
+# ---- 14_AdminTemplates (ADMX) : creer la coquille, puis remap-ou-skip de chaque definitionValue --------
+function Get-AdmxDefinitionCache {
+    # Charge les groupPolicyDefinitions CIBLE UNE fois et indexe par 'displayName|classType|categoryPath' (minuscule).
+    # Les ids de definition DIFFERENT entre tenants meme pour un ADMX identique -> resolution par attributs, jamais par GUID source.
+    if ($null -ne $script:AdmxDefCache) { return $script:AdmxDefCache }
+    $cache = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+    foreach ($d in @(Get-AllValues -Path 'deviceManagement/groupPolicyDefinitions')) {
+        $k = ('{0}|{1}|{2}' -f [string]$d.displayName,[string]$d.classType,[string]$d.categoryPath).ToLowerInvariant()
+        if ($k -and -not $cache.ContainsKey($k)) { $cache[$k] = [string]$d.id }
+    }
+    $script:AdmxDefCache = $cache
+    return $cache
+}
+
+function Get-AdmxPresentations {
+    # Presentations CIBLE d'une definition (en cache). Sert au remap de presentation@odata.bind par label + @odata.type.
+    param([string]$DefId)
+    if ($script:AdmxPresCache.ContainsKey($DefId)) { return $script:AdmxPresCache[$DefId] }
+    $pres = @(Get-AllValues -Path ("deviceManagement/groupPolicyDefinitions('{0}')/presentations" -f $DefId))
+    $script:AdmxPresCache[$DefId] = $pres
+    return $pres
+}
+
+function Resolve-AdmxDefinitionValue {
+    # Construit le corps POST remappe pour UN definitionValue source, ou LEVE SKIP_UNRESOLVED_DEF (fail-closed).
+    # Ne jamais emettre un id de definition/presentation du tenant source : la definition est resolue par attributs
+    # et chaque presentation@odata.bind est imbriquee sous la definition CIBLE resolue. Une seule presentation non
+    # resolue SKIP tout le definitionValue (une valeur partielle 400/corrompt la stratégie).
+    param([hashtable]$Dv)
+    $def = $Dv['definition']
+    if (-not ($def -is [hashtable])) { throw "SKIP_UNRESOLVED_DEF : definitionValue sans definition imbriquee (rehydrater l'export)." }
+    $dName = [string]$def['displayName']; $dClass = [string]$def['classType']; $dCat = [string]$def['categoryPath']
+    $dkey = ('{0}|{1}|{2}' -f $dName,$dClass,$dCat).ToLowerInvariant()
+    $cache = Get-AdmxDefinitionCache
+    $tgtDefId = $null
+    if ($cache.ContainsKey($dkey)) { $tgtDefId = $cache[$dkey] }
+    if ([string]::IsNullOrWhiteSpace($tgtDefId)) {
+        throw "SKIP_UNRESOLVED_DEF : definition ADMX '$dName' (classType=$dClass, category=$dCat) introuvable dans le catalogue cible (ADMX custom/non ingere)."
+    }
+    $body = [ordered]@{
+        'enabled'               = [bool]$Dv['enabled']
+        'definition@odata.bind' = "$GraphBase/deviceManagement/groupPolicyDefinitions('$tgtDefId')"
+    }
+    $srcPvs = @($Dv['presentationValues'])
+    if ($srcPvs.Count -gt 0) {
+        $tgtPres = @(Get-AdmxPresentations -DefId $tgtDefId)
+        $typeCounter = @{}   # compteur de consommation par @odata.type pour le repli par ordre
+        $pvOut = @()
+        foreach ($pv in $srcPvs) {
+            $srcPres  = $pv['presentation']
+            $srcLabel = if ($srcPres -is [hashtable]) { [string]$srcPres['label'] } else { '' }
+            $srcType  = if ($srcPres -is [hashtable]) { [string]$srcPres['@odata.type'] } else { '' }
+            $idx = 0; if ($typeCounter.ContainsKey($srcType)) { $idx = [int]$typeCounter[$srcType] }
+            $typeCounter[$srcType] = $idx + 1
+            $tgtPresId = $null
+            # primaire : match sur label + @odata.type
+            $cand = @($tgtPres | Where-Object { [string]$_.label -eq $srcLabel -and [string]$_.'@odata.type' -eq $srcType })
+            if ($cand.Count -ge 1) { $tgtPresId = [string]$cand[0].id }
+            else {
+                # repli : meme ORDRE parmi les presentations cible de meme @odata.type
+                $sameType = @($tgtPres | Where-Object { [string]$_.'@odata.type' -eq $srcType })
+                if ($sameType.Count -eq 1) { $tgtPresId = [string]$sameType[0].id }   # sans ambiguite seulement ; refuse de deviner par ordre (risque de mauvaise presentation -> SKIP)
+            }
+            if ([string]::IsNullOrWhiteSpace($tgtPresId)) {
+                throw "SKIP_UNRESOLVED_DEF : presentation '$srcLabel' ($srcType) non resolue pour la definition '$dName' -- definitionValue entier skippe."
+            }
+            # conserver le presentationValue verbatim (@odata.type Decimal/Text/List/... + value/values), retirer
+            # seulement presentation/id/timestamps source, puis imbriquer presentation@odata.bind sous la definition CIBLE.
+            $pvClone = [ordered]@{}
+            foreach ($k in $pv.Keys) {
+                if ($k -in @('presentation','id','lastModifiedDateTime','createdDateTime')) { continue }
+                $pvClone[$k] = $pv[$k]
+            }
+            $pvClone['presentation@odata.bind'] = "$GraphBase/deviceManagement/groupPolicyDefinitions('$tgtDefId')/presentations('$tgtPresId')"
+            $pvOut += $pvClone
+        }
+        $body['presentationValues'] = @($pvOut)
+    }
+    return $body
+}
+
+function New-AdminTemplatePayload {
+    # Construit UNIQUEMENT la COQUILLE de config (POST /groupPolicyConfigurations = {displayName, description, roleScopeTagIds}).
+    # Les definitionValues sont Strip du corps de create et POSTes APRES la creation (voir le bloc post-create).
+    # Ils sont captures ICI d'abord, car Remove-TopKeys (New-GenericPayload) mute $O en place -> lire
+    # $O['definitionValues'] apres Build-Payload ne renverrait rien.
+    param([hashtable]$O,$Cat)
+    $script:AdminDefValues = @($O['definitionValues'])
+    return (New-GenericPayload -O $O -Cat $Cat)
+}
+
 # ---- Conditional Access remap-ou-refus (P0-5) -----------------------------------------------------
 function Resolve-CaRefList {
     # Remappe une liste de references CA : laisse passer les CONSTANTES inchangees, remappe les GUID
@@ -485,6 +631,8 @@ function Build-Payload {
             Resolve-CaReferences -O $O
             return (New-GenericPayload -O $O -Cat $Cat)
         }
+        'Enrollment'    { return (New-EnrollmentPayload    -O $O -Cat $Cat) }
+        'AdminTemplate' { return (New-AdminTemplatePayload -O $O -Cat $Cat) }
         default { return (New-GenericPayload -O $O -Cat $Cat) }
     }
 }
@@ -515,8 +663,9 @@ function Write-Reconciliation {
     $htmlPath = Join-Path $reconDir 'reconcile.html'
     $csvPath  = Join-Path $reconDir 'reconcile.csv'
 
-    # 1) Enregistrements canoniques depuis les resultats du moteur (exclut les sous-enregistrements '/msg').
-    $canon = @(foreach ($r in @($script:Results | Where-Object { $_.Family -notlike '*/msg' })) {
+    # 1) Enregistrements canoniques depuis les resultats du moteur (exclut les sous-enregistrements '/msg' + '/defval' :
+    #    ce sont des details par-message / par-valeur-ADMX d'un objet parent, pas des objets source de premier niveau pour l'invariant).
+    $canon = @(foreach ($r in @($script:Results | Where-Object { $_.Family -notlike '*/msg' -and $_.Family -notlike '*/defval' })) {
         [pscustomobject]@{
             family=$r.Family; sourceName=$r.SourceName; appliedName=$r.AppliedName
             identityKey=$r.IdentityKey; outcome=(Get-CanonicalOutcome $r.Status); reason=$r.Reason
@@ -533,9 +682,11 @@ function Write-Reconciliation {
             foreach ($jf in @(Get-ChildItem -LiteralPath $d.FullName -Filter *.json -File -ErrorAction SilentlyContinue)) {
                 $sn = $jf.BaseName
                 try { $o = Read-JsonFile $jf.FullName; if ($o['displayName']) { $sn=[string]$o['displayName'] } elseif ($o['name']) { $sn=[string]$o['name'] } } catch {}
+                $oosReason = $script:OutOfScopeReasons[$d.Name]
+                if ([string]::IsNullOrWhiteSpace($oosReason)) { $oosReason = 'Dossier present dans l''export mais absent du Catalogue d''import (aucun endpoint)' }
                 $outRecords += [pscustomobject]@{
                     family=$d.Name; sourceName=$sn; appliedName=$sn; identityKey=''
-                    outcome='OutOfScope'; reason='Dossier present dans l''export mais absent du Catalogue d''import (aucun endpoint)'
+                    outcome='OutOfScope'; reason=$oosReason
                     targetId=''; remap=@(); timestamp=(Get-Date).ToString('o'); status='OUTOFSCOPE'
                 }
             }
@@ -559,6 +710,7 @@ function Write-Reconciliation {
         $sp = $specialByFolder[$r.family]
         $isCrit = ($sp -eq 'Compliance' -or $sp -eq 'ConditionalAccess' `
             -or $r.family -match '(?i)EndpointSecurity|Baseline' `
+            -or $r.status -eq 'SKIP_FLAG_REVIEW' `
             -or $r.sourceName -like '*aseline*' -or $r.appliedName -like '*aseline*')
         if (-not $isCrit) { continue }
         # OutOfScope compte aussi : un objet securite-critique silencieusement drope (hors $Catalog) ne doit PAS passer pour "tout va bien".
@@ -679,6 +831,7 @@ foreach ($cat in $selected) {
 
     foreach ($f in $files) {
         $script:RemapLog = New-Object System.Collections.Generic.List[object]   # P1-1 : trace de remap pour CET objet
+        $script:AdminDefValues = @()                                            # ADMX : reinitialise le stash des definitionValues par objet
         $obj  = Read-JsonFile $f.FullName
         $script:SourceSeenCount++                                               # P1-1 completude : un objet SOURCE vu
         # SourceName = nom source NON prefixe ; AppliedName ($name) = nom reellement pousse (prefixe).
@@ -718,7 +871,14 @@ foreach ($cat in $selected) {
         if ($NamePrefix -and $payload.Contains($cat.Name)) { $payload[$cat.Name] = $name }
 
         if (-not $Execute) {
-            $extra = if ($cat.Special -eq 'SettingsCatalog') { "settings=$((@($payload['settings'])).Count)" } elseif ($cat.Special -eq 'ConditionalAccess') { 'DESACTIVEE / activation-manuelle-requise' } else { '' }
+            $extra = if ($cat.Special -eq 'SettingsCatalog') { "settings=$((@($payload['settings'])).Count)" }
+                     elseif ($cat.Special -eq 'ConditionalAccess') { 'DESACTIVEE / activation-manuelle-requise' }
+                     elseif ($cat.Special -eq 'AdminTemplate') {
+                        # ADMX dry-run : resoudre chaque definitionValue contre le catalogue CIBLE SANS POSTer.
+                        $dvs = @($script:AdminDefValues); $r=0; $s=0
+                        foreach ($dv in $dvs) { try { [void](Resolve-AdmxDefinitionValue -Dv $dv); $r++ } catch { $s++ } }
+                        "defvals=$($dvs.Count) resolved=$r skipped=$s"
+                     } else { '' }
             Add-Result $cat.Folder $name 'PREVIEW' $extra $null $null -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey -Remap $script:RemapLog
             Write-Host ("  [.] PREVIEW {0} {1}" -f $name,$extra) -ForegroundColor Gray
             continue
@@ -746,6 +906,31 @@ foreach ($cat in $selected) {
                           -Body ($mm | ConvertTo-Json -Depth 20) } | Out-Null
                     } catch { Add-Result ($cat.Folder+'/msg') ("$name/$($m.locale)") 'ERROR' '' $created.id $_.Exception.Message }
                 }
+            }
+
+            # ADMX : apres creation de la coquille, POST chaque definitionValue avec @odata.bind remappe CIBLE.
+            # Chaque valeur est independante (try/catch) : une non resolue est SKIP sans casser les autres ;
+            # la coquille de config existe deja, le tenant n'est donc jamais brické -- seules les valeurs non mappables manquent.
+            if ($cat.Special -eq 'AdminTemplate' -and $created.id) {
+                $dvs = @($script:AdminDefValues); $nRes=0; $nSkip=0
+                foreach ($dv in $dvs) {
+                    $defName = ''
+                    if ($dv['definition'] -is [hashtable]) { $defName = [string]$dv['definition']['displayName'] }
+                    try {
+                        $dvBody = Resolve-AdmxDefinitionValue -Dv $dv
+                        Invoke-GraphWithRetry { Invoke-MgGraphRequest -Method POST -ContentType 'application/json' `
+                          -Uri "$GraphBase/deviceManagement/groupPolicyConfigurations/$($created.id)/definitionValues" `
+                          -Body ($dvBody | ConvertTo-Json -Depth 100) } | Out-Null
+                        $nRes++
+                    } catch {
+                        $dvReason = $_.Exception.Message
+                        $dvStatus = $dvReason.Split(':')[0].Trim()
+                        if ($dvStatus -notlike 'SKIP*') { $dvStatus = 'ERROR' }
+                        $nSkip++
+                        Add-Result ($cat.Folder+'/defval') ("$name / $defName") $dvStatus $dvReason $created.id $dvReason
+                    }
+                }
+                Write-Host ("      defvals={0} resolved={1} skipped={2}" -f @($dvs).Count,$nRes,$nSkip) -ForegroundColor DarkCyan
             }
         } catch {
             Add-Result $cat.Folder $name 'ERROR' '' $null $_.Exception.Message -SourceName $sourceName -AppliedName $name -IdentityKey $identityKey
