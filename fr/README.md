@@ -86,6 +86,8 @@ d'appareils & empreintes matérielles Autopilot, binaires d'apps (`.intunewin`) 
 
 > 📌 Liste complète de ce qui n'est **pas** cloné (et comment gérer chaque élément) : [`LIMITATIONS.md`](LIMITATIONS.md).
 >
+> 📊 **Tableau de capacités complet** — chaque élément, statut par statut (✅ automatisé · 🟡 partiel · 🟠 manuel/assisté IA · ❌ hors de portée) : [`CAPACITES.md`](CAPACITES.md).
+>
 > 🧪 **Expérimental (nouveau en v2.3.0) — import Admin Templates & Enrollment.** Ces deux familles sont
 > désormais réimportées, mais ce chemin d'import est **expérimental et n'a _pas_ été validé par les
 > mainteneurs sur un vrai tenant.** **Lancez-le d'abord en PREVIEW, testez sur un tenant bac à sable, puis

@@ -90,6 +90,8 @@ verification (it no longer just compares object counts), and paginates backup/ve
 
 > 📌 Full list of what is **not** cloned (and how to handle each item): [`LIMITATIONS.md`](LIMITATIONS.md).
 >
+> 📊 **Full capability table** — every element, status by status (✅ automated · 🟡 partial · 🟠 manual/AI-assisted · ❌ out of reach): [`CAPABILITIES.md`](CAPABILITIES.md).
+>
 > 🧪 **Experimental (new in v2.3.0) — Admin Templates & Enrollment import.** These two families are now
 > re-imported, but the import path is **experimental and has _not_ been validated by the maintainers against
 > a live tenant.** **Run it in PREVIEW first, test on a sandbox tenant, then please

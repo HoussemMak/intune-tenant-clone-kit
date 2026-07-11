@@ -24,6 +24,9 @@ Reliably clone a Microsoft Intune configuration from one tenant to another
 Each folder is a **complete, self-contained bundle** in its language (scripts, docs, sample export).
 *Chaque dossier est un **bundle complet et autonome** dans sa langue (scripts, docs, exemple).*
 
+> 📊 **Capability table · Tableau de capacités** — every Intune element, status by status:
+> [🇬🇧 `en/CAPABILITIES.md`](en/CAPABILITIES.md) · [🇫🇷 `fr/CAPACITES.md`](fr/CAPACITES.md)
+
 ![What the kit clones vs. what re-pairs — at a glance](assets/overview.png)
 
 > ⚠️ Read the DISCLAIMER before any use. Test on a sandbox tenant first.
